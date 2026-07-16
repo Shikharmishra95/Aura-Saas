@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Form
+from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select, and_, update
@@ -189,9 +190,16 @@ async def save_hospital_twilio(
     await set_setting("twilio_account_sid", account_sid)
     await set_setting("twilio_auth_token", auth_token)
     await set_setting("twilio_helpline", helpline)
+
+    # Also update the main phone number column on the Hospital table for inbound routing
+    hosp_stmt = select(Hospital).where(Hospital.id == hospital_id)
+    hospital_record = (await db.execute(hosp_stmt)).scalar_one_or_none()
+    if hospital_record:
+        hospital_record.phone = helpline
+        db.add(hospital_record)
     
     await db.commit()
-    return {"success": True, "message": "Twilio configuration persisted successfully."}
+    return {"success": True, "message": "Twilio configuration persisted and helpline injected successfully."}
 
 
 # ==========================================
