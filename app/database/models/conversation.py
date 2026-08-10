@@ -1,6 +1,6 @@
 from datetime import datetime, date, time
 from typing import List, Optional
-from sqlalchemy import String, Integer, Boolean, Time, Date, DateTime, Text, ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import String, Integer, Boolean, Time, Date, DateTime, Text, ForeignKey, Numeric, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from app.database.declarative import Base
@@ -33,6 +33,9 @@ class VoiceSession(Base):
     patient_id: Mapped[Optional[str]] = mapped_column(ForeignKey("patients.id", ondelete="SET NULL"), nullable=True)
     gemini_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     session_status: Mapped[str] = mapped_column(String(50), default="ACTIVE")
+    current_state: Mapped[str] = mapped_column(String(50), default="NAME")
+    booking_context: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

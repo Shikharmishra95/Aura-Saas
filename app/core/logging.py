@@ -9,6 +9,11 @@ LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / "hospital_voice_receptionist.log"
 
+import contextvars
+
+request_id_context = contextvars.ContextVar("request_id", default=None)
+hospital_id_context = contextvars.ContextVar("hospital_id", default=None)
+
 def setup_logging():
     """Sets up standard output and rotating file logging for the application."""
     log_format = (
@@ -18,7 +23,17 @@ def setup_logging():
     # Custom filter to inject trace/metadata if needed, ensuring format consistency
     class TraceFilter(logging.Filter):
         def filter(self, record):
-            if not hasattr(record, "metadata"):
+            req_id = request_id_context.get()
+            hosp_id = hospital_id_context.get()
+            meta_parts = []
+            if req_id:
+                meta_parts.append(f"req_{req_id}")
+            if hosp_id:
+                meta_parts.append(f"hosp_{hosp_id}")
+            
+            if meta_parts:
+                record.metadata = "|".join(meta_parts)
+            elif not hasattr(record, "metadata"):
                 record.metadata = "SYSTEM"
             return True
 

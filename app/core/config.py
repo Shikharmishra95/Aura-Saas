@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # Payment Gateway — Razorpay Integration
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
-    PAYMENT_BASE_URL: str = "https://pay.cptiwari.com/appointment"
+    PAYMENT_BASE_URL: str = "https://aura-saas.up.railway.app/appointment"
 
     # n8n Automation Service Configurations
     N8N_WEBHOOK_URL: str

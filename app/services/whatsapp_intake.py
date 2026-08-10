@@ -81,11 +81,32 @@ class WhatsAppIntakeService:
         genai.configure(api_key=settings.GEMINI_API_KEY)
         self.model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
-    def _send_sync(self, to: str, body: str) -> Optional[str]:
+    async def _get_credentials_for_appointment(self, appointment_id: str) -> tuple:
+        """Dynamically resolve Twilio credentials for the hospital of this appointment.
+        Forced to use the default platform credentials and WhatsApp number.
+        """
+        try:
+            from app.database.session import async_session_factory
+            from app.database.models.appointment import Appointment
+            from sqlalchemy import select
+
+            async with async_session_factory() as db:
+                appt_stmt = select(Appointment.hospital_id).where(Appointment.id == appointment_id)
+                hosp_id = (await db.execute(appt_stmt)).scalar_one_or_none()
+                if not hosp_id:
+                    hosp_id = "hosp_default"
+                return None, None, self.from_number, hosp_id
+        except Exception as e:
+            logger.error(f"Error resolving hospital_id: {str(e)}")
+        return None, None, self.from_number, "hosp_default"
+
+    def _send_sync(self, to: str, body: str, client: Optional[Client] = None, from_number: Optional[str] = None) -> Optional[str]:
         """Synchronous Twilio send (runs in thread pool)."""
         try:
-            msg = self.twilio.messages.create(
-                from_=self.from_number,
+            active_client = client if client else self.twilio
+            active_from = from_number if from_number else self.from_number
+            msg = active_client.messages.create(
+                from_=active_from,
                 to=to,
                 body=body
             )
@@ -95,9 +116,15 @@ class WhatsAppIntakeService:
             logger.error(f"WhatsApp intake send failed to {to}: {str(e)}")
             return None
 
-    async def _send(self, to: str, body: str):
+    async def _send(self, to: str, body: str, session: Optional[dict] = None):
+        client = None
+        from_number = None
+        if session and session.get("twilio_sid") and session.get("twilio_token"):
+            client = Client(session["twilio_sid"], session["twilio_token"])
+            from_number = session.get("from_number")
+        
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(_executor, self._send_sync, to, body)
+        await loop.run_in_executor(_executor, self._send_sync, to, body, client, from_number)
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 1: Start conversation after payment
@@ -117,13 +144,33 @@ class WhatsAppIntakeService:
         else:
             wa_to = patient_phone
 
+        # Resolve credentials and hospital name
+        sid, token, from_num, hosp_id = await self._get_credentials_for_appointment(appointment_id)
+        hosp_name = "CP Tiwari Hospital"
+        try:
+            from app.database.session import async_session_factory
+            from app.database.models.appointment import Hospital
+            from sqlalchemy import select
+            async with async_session_factory() as db:
+                stmt = select(Hospital.name).where(Hospital.id == hosp_id)
+                res_name = (await db.execute(stmt)).scalar_one_or_none()
+                if res_name:
+                    hosp_name = res_name
+        except Exception:
+            pass
+
         # Create session
-        set_session(wa_to, {
+        session_data = {
             "appointment_id": appointment_id,
+            "hospital_id": hosp_id,
+            "hospital_name": hosp_name,
             "patient_name": patient_name,
             "doctor_name": doctor_name,
             "appointment_datetime": appointment_datetime,
             "stage": "GREETING",
+            "twilio_sid": sid,
+            "twilio_token": token,
+            "from_number": from_num,
             "data": {
                 "has_visited_before": None,
                 "previous_doctor": None,
@@ -133,10 +180,11 @@ class WhatsAppIntakeService:
                 "additional_notes": None,
             },
             "history": []  # Gemini conversation history
-        })
+        }
+        set_session(wa_to, session_data)
 
         greeting_msg = (
-            f"🏥 *CP Tiwari Hospital*\n"
+            f"🏥 *{hosp_name}*\n"
             f"✅ *आपकी अपॉइंटमेंट Confirm हो गई!*\n\n"
             f"नमस्ते *{patient_name}* जी!\n"
             f"👨‍⚕️ Doctor: *{doctor_name}*\n"
@@ -146,7 +194,7 @@ class WhatsAppIntakeService:
             f"➡️ *हाँ* या *नहीं* में जवाब दें।"
         )
 
-        await self._send(wa_to, greeting_msg)
+        await self._send(wa_to, greeting_msg, session_data)
         logger.info(f"Intake conversation started for {patient_phone}, appt: {appointment_id}")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -180,10 +228,10 @@ class WhatsAppIntakeService:
         if next_stage == "DONE":
             # Save to DB and clear session
             await self._save_intake(session, from_number)
-            await self._send(from_number, next_msg)
+            await self._send(from_number, next_msg, session)
             clear_session(from_number)
         else:
-            await self._send(from_number, next_msg)
+            await self._send(from_number, next_msg, session)
 
         return True
 
@@ -262,13 +310,14 @@ class WhatsAppIntakeService:
             return "DONE", self._build_done_message(data, session)
 
     def _build_done_message(self, data: dict, session: dict) -> str:
+        hosp_name = session.get('hospital_name', 'CP Tiwari Hospital')
         return (
             f"✅ *बहुत बढ़िया {session['patient_name']} जी!*\n\n"
             f"आपकी सारी जानकारी Doctor के पास पहुँच गई है।\n"
             f"Doctor साहब आपसे मिलने पर इसे देखेंगे।\n\n"
             f"📅 समय पर आइएगा:\n*{self._fmt_dt(session['appointment_datetime'])}*\n\n"
             f"किसी भी सहायता के लिए call करें। धन्यवाद! 🙏\n"
-            f"_— CP Tiwari Hospital_"
+            f"_— {hosp_name}_"
         )
 
     async def _parse_intent(self, reply: str) -> str:

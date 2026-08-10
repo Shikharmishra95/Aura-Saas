@@ -21,9 +21,12 @@ class SchedulingEngine:
             engine_logger.warning(f"Doctor {doctor_id} not found or inactive.")
             return []
         
-        # 1.5 Enforce blocking today's bookings (only allow tomorrow and onwards)
-        if search_date <= date.today():
-            engine_logger.info(f"Blocking slot generation for today or past date: {search_date}")
+        # 1.5 Enforce blocking past dates (allow today's remaining future slots and onwards in IST)
+        from datetime import timezone, timedelta as td_type
+        ist_now = datetime.now(timezone.utc) + td_type(hours=5, minutes=30)
+        ist_today = ist_now.date()
+        if search_date < ist_today:
+            engine_logger.info(f"Blocking slot generation for past date: {search_date}")
             return []
             
         hospital_id = doctor_result.hospital_id
@@ -49,16 +52,24 @@ class SchedulingEngine:
             )
         )
         wh = (await self.db.execute(wh_stmt)).scalar_one_or_none()
-        if not wh or wh.is_closed:
+        if not wh:
+            # Default working hour if hospital settings not explicitly inserted
+            class DefaultWorkingHour:
+                open_time = time(9, 0)
+                close_time = time(21, 0)
+                is_closed = False
+            wh = DefaultWorkingHour()
+        elif wh.is_closed:
             engine_logger.info(f"Hospital is closed on weekday {day_of_week} ({search_date}).")
             return []
 
-        # 4. Check if Doctor is on Leave
+        # 4. Check if Doctor is on APPROVED Leave
         leave_stmt = select(DoctorLeave).where(
             and_(
                 DoctorLeave.doctor_id == doctor_id,
                 DoctorLeave.start_date <= search_date,
-                DoctorLeave.end_date >= search_date
+                DoctorLeave.end_date >= search_date,
+                DoctorLeave.status == "APPROVED"
             )
         )
         leave_result = (await self.db.execute(leave_stmt)).scalar_one_or_none()
@@ -75,8 +86,21 @@ class SchedulingEngine:
         )
         schedules = (await self.db.execute(sched_stmt)).scalars().all()
         if not schedules:
-            engine_logger.info(f"Doctor {doctor_id} has no schedule configured for weekday {day_of_week}.")
-            return []
+            if day_of_week <= 6:
+                # Default OPD schedule (Mon-Sat: 09:00-13:00, 17:00-20:00) if no custom schedule in DB
+                class DefaultDoctorSchedule:
+                    def __init__(self, start_t, end_t, dur=30):
+                        self.id = "default"
+                        self.start_time = start_t
+                        self.end_time = end_t
+                        self.slot_duration_minutes = dur
+                schedules = [
+                    DefaultDoctorSchedule(time(9, 0), time(13, 0), 30),
+                    DefaultDoctorSchedule(time(17, 0), time(20, 0), 30)
+                ]
+            else:
+                engine_logger.info(f"Doctor {doctor_id} has no schedule configured for weekday {day_of_week} (Sunday).")
+                return []
 
         # 6. Fetch Existing bookings for this doctor on this day
         start_datetime = datetime.combine(search_date, time.min)
@@ -95,6 +119,9 @@ class SchedulingEngine:
 
         # 7. Generate Slots
         available_slots: List[AvailableSlot] = []
+        is_today = (search_date == ist_today)
+        current_ist_time = ist_now.time()
+
         for schedule in schedules:
             if not schedule.slot_duration_minutes or schedule.slot_duration_minutes <= 0:
                 engine_logger.error(f"Doctor schedule {schedule.id} has invalid slot duration: {schedule.slot_duration_minutes}. Skipping to prevent infinite loop.")
@@ -106,6 +133,11 @@ class SchedulingEngine:
             while current_time + slot_duration <= end_time_limit:
                 slot_time = current_time.time()
                 
+                # If searching for today, skip slots that have already passed
+                if is_today and slot_time <= current_ist_time:
+                    current_time += slot_duration
+                    continue
+
                 # Verify that the slot is within hospital opening hours
                 if wh.open_time <= slot_time < wh.close_time:
                     # Check if the slot overlaps with existing appointments
@@ -121,3 +153,15 @@ class SchedulingEngine:
 
         engine_logger.info(f"Generated {len(available_slots)} available slots for doctor {doctor_id} on {search_date}")
         return available_slots
+
+    async def get_doctor_leave_info(self, doctor_id: str, search_date: date):
+        """Returns DoctorLeave record if doctor is on approved leave on search_date."""
+        leave_stmt = select(DoctorLeave).where(
+            and_(
+                DoctorLeave.doctor_id == doctor_id,
+                DoctorLeave.start_date <= search_date,
+                DoctorLeave.end_date >= search_date,
+                DoctorLeave.status == "APPROVED"
+            )
+        )
+        return (await self.db.execute(leave_stmt)).scalar_one_or_none()

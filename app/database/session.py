@@ -9,8 +9,13 @@ async_engine = create_async_engine(
     settings.ASYNC_DATABASE_URL,
     echo=False,  # Set to True for verbose SQLAlchemy queries logging in debugging
     pool_pre_ping=True,
-    pool_size=20,
-    max_overflow=10
+    pool_recycle=120,         # Recycle connections every 2 minutes (Railway cloud DB)
+    pool_size=10,             # Reduced pool size — Railway has connection limits
+    max_overflow=20,          # Allow burst connections
+    pool_timeout=30,          # Wait up to 30s for a pool slot before error
+    connect_args={
+        "connect_timeout": 30  # Max 30s to establish initial TCP connection
+    }
 )
 
 async_session_factory = async_sessionmaker(

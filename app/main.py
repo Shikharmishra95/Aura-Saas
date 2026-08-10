@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.api.v1.router import api_router
 from app.core.logging import logger
+from app.database.session import get_db
 
 def create_app() -> FastAPI:
     """Application factory for configuring and returning the FastAPI app instance."""
@@ -27,6 +28,10 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    # Register Context Logging Middleware
+    from app.core.middleware import LogContextMiddleware
+    app.add_middleware(LogContextMiddleware)
+
     # 2. Register custom application exceptions mapping handlers
     register_exception_handlers(app)
 
@@ -43,10 +48,19 @@ def create_app() -> FastAPI:
 
     # 4. Root Health Check Endpoint
     @app.get("/health", tags=["system"])
-    async def health_check():
-        """Basic service status check API."""
+    async def health_check(db = Depends(get_db)):
+        """Basic service status check API with database ping."""
+        from sqlalchemy import text
+        db_status = "healthy"
+        try:
+            await db.execute(text("SELECT 1"))
+        except Exception as e:
+            logger.error(f"Database health check failed: {str(e)}")
+            db_status = f"unhealthy: {str(e)}"
+            
         return {
-            "status": "healthy",
+            "status": "healthy" if db_status == "healthy" else "degraded",
+            "database": db_status,
             "environment": settings.ENV,
             "project": settings.PROJECT_NAME
         }

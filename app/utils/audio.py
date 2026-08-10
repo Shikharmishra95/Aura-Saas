@@ -88,3 +88,13 @@ def resample_pcm(pcm_data: bytes, from_rate: int, to_rate: int) -> bytes:
         new_samples.append(val)
         
     return struct.pack(f"<{len(new_samples)}h", *new_samples)
+
+def calculate_amplitude(pcm_bytes: bytes) -> float:
+    """Calculates average absolute sample amplitude for 16-bit linear PCM audio."""
+    if not pcm_bytes:
+        return 0.0
+    num_samples = len(pcm_bytes) // 2
+    if num_samples == 0:
+        return 0.0
+    samples = struct.unpack(f"<{num_samples}h", pcm_bytes)
+    return sum(abs(s) for s in samples) / num_samples

@@ -1,21 +1,6 @@
 """
 WhatsApp Notification Service — Twilio WhatsApp API se directly notification bhejo.
-n8n ki zarurat nahi. Twilio ke same credentials use karta hai jo voice ke liye hain.
-
-Do types ke messages:
-  1. Receptionist ko — nai appointment ki table notification
-  2. Patient ko — unki appointment confirmation + payment link
-
-Setup:
-------
-TESTING (Sandbox):
-  1. https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn par jao
-  2. WhatsApp se +14155238886 par "join <sandbox-word>" bhejo
-  3. .env mein TWILIO_WHATSAPP_FROM=whatsapp:+14155238886 rakho
-
-PRODUCTION:
-  1. Twilio Console mein WhatsApp Business number approve karwao
-  2. .env mein TWILIO_WHATSAPP_FROM=whatsapp:+91XXXXXXXXXX update karo
+Shared sender used for all hospitals and all messages.
 """
 
 import asyncio
@@ -41,19 +26,87 @@ class WhatsAppNotificationService:
         """Check if WhatsApp notification is configured."""
         return bool(self.receptionist_number and self.receptionist_number != "whatsapp:+919999999999")
 
-    def _send_sync(self, to: str, body: str) -> Optional[str]:
+    async def _resolve_hospital_info(self, details: dict) -> tuple[str, str]:
+        h_id = "hosp_default"
+        if "hospital_id" in details and details["hospital_id"]:
+            h_id = details["hospital_id"]
+        else:
+            appt_id = details.get("appointment_id")
+            if appt_id:
+                try:
+                    from app.database.session import async_session_factory
+                    from app.database.models.appointment import Appointment
+                    from sqlalchemy import select
+                    async with async_session_factory() as db:
+                        stmt = select(Appointment.hospital_id).where(Appointment.id == appt_id)
+                        res = (await db.execute(stmt)).scalar_one_or_none()
+                        if res:
+                            h_id = res
+                except Exception as e:
+                    logger.error(f"Error resolving hospital_id: {str(e)}")
+        
+        h_name = "Hospital"
+        try:
+            from app.database.session import async_session_factory
+            from app.database.models.appointment import Hospital
+            from sqlalchemy import select
+            async with async_session_factory() as db:
+                stmt = select(Hospital.name).where(Hospital.id == h_id)
+                res = (await db.execute(stmt)).scalar_one_or_none()
+                if res:
+                    h_name = res
+        except Exception:
+            pass
+            
+        details["hospital_id"] = h_id
+        details["hospital_name"] = h_name
+        return h_id, h_name
+
+    async def _get_client_for_hospital(self, hospital_id: Optional[str]) -> tuple:
+        """Returns (TwilioClient, from_number) for a specific hospital or default config.
+        Forced to use the shared Twilio account and from_number for all hospitals.
+        """
+        return self.client, self.from_number
+
+    def _send_sync(self, to: str, body: str, client: Optional[Client] = None, from_number: Optional[str] = None) -> Optional[str]:
         """Synchronous Twilio API call — runs inside thread pool."""
         try:
-            message = self.client.messages.create(
-                from_=self.from_number,
-                to=to,
+            active_client = client if client else self.client
+            active_from = from_number if from_number else self.from_number
+
+            # Robust E.164 phone formatting for Indian (+91) numbers
+            clean_to = to.replace("whatsapp:", "").strip()
+            if clean_to.startswith("+1") and len(clean_to) == 12 and clean_to[2] in "6789":
+                clean_to = "+91" + clean_to[2:]
+            elif not clean_to.startswith("+"):
+                if len(clean_to) == 10 and clean_to[0] in "6789":
+                    clean_to = "+91" + clean_to
+                else:
+                    clean_to = "+" + clean_to
+
+            final_to = f"whatsapp:{clean_to}"
+
+            message = active_client.messages.create(
+                from_=active_from,
+                to=final_to,
                 body=body
             )
-            logger.info(f"SUCCESS: WhatsApp sent to {to}. SID: {message.sid}")
+            logger.info(f"SUCCESS: WhatsApp sent to {final_to}. SID: {message.sid}")
             return message.sid
         except Exception as e:
             logger.error(f"ERROR: WhatsApp send failed to {to}: {str(e)}")
             return None
+
+    def _format_whatsapp_number(self, phone_raw: str) -> str:
+        """Format raw phone number into Twilio E.164 whatsapp format (adds +91 if missing)."""
+        if not phone_raw:
+            return ""
+        clean = str(phone_raw).strip().replace("whatsapp:", "").replace(" ", "").replace("-", "")
+        if clean.isdigit() and len(clean) == 10:
+            clean = "+91" + clean
+        elif not clean.startswith("+") and clean.isdigit():
+            clean = "+" + clean
+        return f"whatsapp:{clean}"
 
     def _format_datetime(self, dt_str: str) -> str:
         """Convert ISO datetime string to human-readable Hindi-friendly format."""
@@ -65,41 +118,12 @@ class WhatsAppNotificationService:
             return dt_str or "N/A"
 
     async def send_appointment_booked(self, details: dict) -> None:
-        """
-        Nayi appointment book hone par RECEPTIONIST ke WhatsApp par notification bhejo.
-        Non-blocking — event loop ko block nahi karta.
-        """
-        if not self._is_configured():
-            logger.warning(
-                "WhatsApp notification skipped: RECEPTIONIST_WHATSAPP_NUMBER not set in .env."
-            )
-            return
-
-        appt_display = self._format_datetime(details.get("appointment_datetime", ""))
-
-        message_body = (
-            f"🏥 *CP Tiwari Hospital*\n"
-            f"📋 *नई अपॉइंटमेंट बुक हुई!*\n\n"
-            f"👤 *मरीज़:* {details.get('patient_name', 'N/A')}\n"
-            f"📞 *मोबाइल:* {details.get('patient_phone', 'N/A')}\n"
-            f"👨‍⚕️ *डॉक्टर:* {details.get('doctor_name', 'N/A')}\n"
-            f"📅 *समय:* {appt_display}\n"
-            f"🩺 *समस्या:* {details.get('reason', 'N/A')}\n"
-            f"🆔 *ID:* ...{details.get('appointment_id', 'N/A')[-8:]}\n\n"
-            f"📊 _आज का Schedule:_ {settings.TWILIO_WEBHOOK_URL}receptionist/schedule"
-        )
-
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            _whatsapp_executor,
-            self._send_sync,
-            self.receptionist_number,
-            message_body
-        )
+        """Disabled: Only 5 core notification flows allowed."""
+        pass
 
     async def send_patient_confirmation(self, details: dict) -> None:
         """
-        Appointment confirm hone par PATIENT ke apne WhatsApp number par
+        Flow 4: Appointment confirm hone par PATIENT ke apne WhatsApp number par
         sari details + payment link bhejo.
         """
         patient_phone_raw = details.get("patient_phone", "")
@@ -107,12 +131,10 @@ class WhatsAppNotificationService:
             logger.warning("Patient WhatsApp skipped: patient_phone not available.")
             return
 
-        # Ensure whatsapp: prefix
-        if not patient_phone_raw.startswith("whatsapp:"):
-            patient_to = f"whatsapp:{patient_phone_raw}"
-        else:
-            patient_to = patient_phone_raw
+        patient_to = self._format_whatsapp_number(patient_phone_raw)
 
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
         appt_display = self._format_datetime(details.get("appointment_datetime", ""))
         
         # Dynamically build payment checkout URL. Auto-detect if running on Railway.
@@ -130,7 +152,7 @@ class WhatsAppNotificationService:
         appt_id_short = details.get('appointment_id', 'N/A')[-8:]
 
         message_body = (
-            f"🏥 *CP Tiwari Hospital*\n"
+            f"🏥 *{details.get('hospital_name', 'Hospital')}*\n"
             f"✅ *आपकी अपॉइंटमेंट बुक हो गई!*\n\n"
             f"👤 *नाम:* {details.get('patient_name', 'N/A')}\n"
             f"👨‍⚕️ *डॉक्टर:* {details.get('doctor_name', 'N/A')}\n"
@@ -148,12 +170,14 @@ class WhatsAppNotificationService:
             _whatsapp_executor,
             self._send_sync,
             patient_to,
-            message_body
+            message_body,
+            client,
+            from_number
         )
 
     async def send_payment_confirmation(self, details: dict) -> None:
         """
-        Send a payment success and final appointment confirmation WhatsApp message to the patient.
+        Flow 4 (alternative): Send a payment success and final appointment confirmation WhatsApp message to the patient.
         """
         patient_phone_raw = details.get("patient_phone", "")
         if not patient_phone_raw:
@@ -166,11 +190,13 @@ class WhatsAppNotificationService:
         else:
             patient_to = patient_phone_raw
 
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
         appt_display = self._format_datetime(details.get("appointment_datetime", ""))
         appt_id_short = details.get('appointment_id', 'N/A')[-8:]
 
         message_body = (
-            f"🏥 *CP Tiwari Hospital*\n"
+            f"🏥 *{details.get('hospital_name', 'Hospital')}*\n"
             f"🎉 *पेमेंट प्राप्त हुआ - अपॉइंटमेंट पक्की हो गई!*\n\n"
             f"नमस्ते {details.get('patient_name', 'N/A')} जी,\n"
             f"हमें आपका पेमेंट सफलतापूर्वक प्राप्त हो गया है।\n\n"
@@ -180,7 +206,7 @@ class WhatsAppNotificationService:
             f"🩺 *समस्या:* {details.get('reason', 'N/A')}\n"
             f"🆔 *Appointment ID:* {appt_id_short}\n\n"
             f"✅ *आपकी अपॉइंटमेंट अब confirmed है।* आपको अस्पताल पहुंचने पर सीधे ओपीडी (OPD) में प्रवेश मिलेगा।\n\n"
-            f"_CP Tiwari Hospital पर विश्वास जताने के लिए धन्यवाद!_"
+            f"_— {details.get('hospital_name', 'Hospital')} पर विश्वास जताने के लिए धन्यवाद!_"
         )
 
         loop = asyncio.get_event_loop()
@@ -188,12 +214,14 @@ class WhatsAppNotificationService:
             _whatsapp_executor,
             self._send_sync,
             patient_to,
-            message_body
+            message_body,
+            client,
+            from_number
         )
 
     async def send_reschedule_notification(self, details: dict) -> None:
         """
-        Receptionist ke Reschedule action par PATIENT ke WhatsApp par nayi
+        Flow 5: Receptionist ke Reschedule action par PATIENT ke WhatsApp par nayi
         appointment details aur cutoff arrival time bhejo.
         """
         patient_phone_raw = details.get("patient_phone", "")
@@ -206,10 +234,12 @@ class WhatsAppNotificationService:
         else:
             patient_to = patient_phone_raw
 
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
         appt_display = self._format_datetime(details.get("new_datetime", ""))
 
         message_body = (
-            f"🏥 *CP Tiwari Hospital*\n"
+            f"🏥 *{details.get('hospital_name', 'Hospital')}*\n"
             f"📅 *आपकी अपॉइंटमेंट Reschedule हो गई है*\n\n"
             f"नमस्ते {details.get('patient_name', '')} जी,\n"
             f"आपकी अपॉइंटमेंट का नया समय निर्धारित कर दिया गया है।\n\n"
@@ -223,7 +253,7 @@ class WhatsAppNotificationService:
 
         message_body += (
             f"\nकृपया समय पर पहुंचें। किसी सहायता के लिए हमें call करें।\n"
-            f"_— CP Tiwari Hospital टीम_"
+            f"_— {details.get('hospital_name', 'Hospital')} टीम_"
         )
 
         loop = asyncio.get_event_loop()
@@ -231,91 +261,135 @@ class WhatsAppNotificationService:
             _whatsapp_executor,
             self._send_sync,
             patient_to,
-            message_body
+            message_body,
+            client,
+            from_number
         )
+
+    async def send_cash_booking_confirmation(self, details: dict) -> None:
+        """Send WhatsApp confirmation for Cash payments (No payment link)."""
+        patient_phone_raw = details.get("patient_phone", "")
+        if not patient_phone_raw:
+            return
+        patient_to = self._format_whatsapp_number(patient_phone_raw)
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
+        appt_display = self._format_datetime(details.get("appointment_datetime", ""))
+
+        message_body = (
+            f"🏥 *{details.get('hospital_name', 'Hospital')}*\n"
+            f"✅ *आपकी अपॉइंटमेंट की पुष्टि हो गई है!*\n\n"
+            f"👤 *मरीज़:* {details.get('patient_name', 'N/A')}\n"
+            f"👨‍⚕️ *डॉक्टर:* {details.get('doctor_name', 'N/A')}\n"
+            f"📅 *तारीख व समय:* {appt_display}\n"
+            f"🩺 *समस्या:* {details.get('reason', 'N/A')}\n"
+            f"💰 *भुगतान स्थिति:* नकद प्राप्त (PAID — ₹{details.get('fees', '500')})\n\n"
+            f"कृपया समय पर अस्पताल पहुँचें। धन्यवाद!\n"
+            f"_— {details.get('hospital_name', 'Hospital')} टीम_"
+        )
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_whatsapp_executor, self._send_sync, patient_to, message_body, client, from_number)
+
+    async def send_counter_booking_confirmation(self, details: dict) -> None:
+        """Send WhatsApp confirmation for Pay at Hospital Counter (No payment link)."""
+        patient_phone_raw = details.get("patient_phone", "")
+        if not patient_phone_raw:
+            return
+        patient_to = self._format_whatsapp_number(patient_phone_raw)
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
+        appt_display = self._format_datetime(details.get("appointment_datetime", ""))
+
+        # Dynamically build payment checkout URL
+        import os
+        railway_domain = os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+        if railway_domain:
+            if not railway_domain.startswith("http"):
+                base_url = f"https://{railway_domain}"
+            else:
+                base_url = railway_domain.rstrip('/')
+        else:
+            base_url = settings.TWILIO_WEBHOOK_URL.rstrip('/') if settings.TWILIO_WEBHOOK_URL else settings.PAYMENT_BASE_URL.rstrip('/')
+
+        payment_link = f"{base_url}/payment/checkout"
+        appt_id_short = details.get('appointment_id', 'N/A')[-8:]
+
+        message_body = (
+            f"🏥 *{details.get('hospital_name', 'Hospital')}*\n"
+            f"✅ *आपकी अपॉइंटमेंट सफलतापूर्वक बुक हो गई है!*\n\n"
+            f"👤 *मरीज़:* {details.get('patient_name', 'N/A')}\n"
+            f"👨‍⚕️ *डॉक्टर:* {details.get('doctor_name', 'N/A')}\n"
+            f"📅 *तारीख व समय:* {appt_display}\n"
+            f"🩺 *समस्या:* {details.get('reason', 'N/A')}\n"
+            f"💵 *देय राशि:* ₹{details.get('fees', '500')} (अस्पताल काउंटर पर देय)\n\n"
+            f"⏳ *अस्पताल में समय बचाने के लिए ऑनलाइन पेमेंट करें:*\n"
+            f"{payment_link}?appt={appt_id_short}\n\n"
+            f"कृपया समय पर अस्पताल पहुँचें।\n"
+            f"_— {details.get('hospital_name', 'Hospital')} टीम_"
+        )
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_whatsapp_executor, self._send_sync, patient_to, message_body, client, from_number)
 
     async def send_missed_notification(self, details: dict) -> None:
-        """
-        Receptionist ke Missed status mark karne par patient ko WhatsApp alert bhejo.
-        """
-        patient_phone_raw = details.get("patient_phone", "")
-        if not patient_phone_raw:
-            logger.warning("Missed WhatsApp skipped: patient_phone not available.")
+        """Send notification when appointment is marked as MISSED."""
+        phone_raw = details.get("patient_phone", "")
+        if not phone_raw:
             return
-
-        if not patient_phone_raw.startswith("whatsapp:"):
-            patient_to = f"whatsapp:{patient_phone_raw}"
-        else:
-            patient_to = patient_phone_raw
-
-        appt_display = self._format_datetime(details.get("appointment_datetime", ""))
-
+        
+        staff_to = f"whatsapp:{phone_raw}" if not phone_raw.startswith("whatsapp:") else phone_raw
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
+        
+        date_str = details.get("date", "Today")
+        time_str = details.get("time", "")
+        doc_name = details.get("doctor_name", "Doctor")
+        
         message_body = (
-            f"🏥 *CP Tiwari Hospital*\n"
-            f"⚠️ *अपॉइंटमेंट सूचना (Missed Appointment)*\n\n"
+            f"🏥 *{details.get('hospital_name', 'Hospital')} — Appointment Missed*\n\n"
             f"नमस्ते {details.get('patient_name', '')} जी,\n"
-            f"आपकी आज की डॉक्टर अपॉइंटमेंट के लिए निर्धारित समय पर आप अस्पताल नहीं पहुँच पाए।\n\n"
-            f"👨‍⚕️ *डॉक्टर:* {details.get('doctor_name', 'N/A')}\n"
-            f"📅 *निर्धारित समय:* {appt_display}\n"
-            f"🩺 *समस्या:* {details.get('reason', 'N/A')}\n\n"
-            f"अगर आप इसे reschedule करना चाहते हैं, तो कृपया अस्पताल के हेल्पलाइन नंबर पर संपर्क करें।\n"
-            f"_— CP Tiwari Hospital टीम_"
+            f"आपका अपॉइंटमेंट डॉ. {doc_name} के साथ {date_str} को {time_str} बजे का था, "
+            f"लेकिन आप समय पर उपस्थित नहीं हो पाए। इसलिए इसे *MISSED* मार्क कर दिया गया है।\n\n"
+            f"नया अपॉइंटमेंट बुक करने के लिए कृपया हमें संपर्क करें।\n"
+            f"_— {details.get('hospital_name', 'Hospital')} टीम_"
         )
-
+        
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            _whatsapp_executor,
-            self._send_sync,
-            patient_to,
-            message_body
-        )
+        await loop.run_in_executor(_whatsapp_executor, self._send_sync, staff_to, message_body, client, from_number)
 
     async def send_cancellation_refund_notification(self, details: dict) -> None:
-        """
-        Appointment cancel hone par patient ko WhatsApp alert aur optional refund details bhejo.
-        """
-        patient_phone_raw = details.get("patient_phone", "")
-        if not patient_phone_raw:
-            logger.warning("Cancellation WhatsApp skipped: patient_phone not available.")
+        """Send cancellation notification with optional refund text."""
+        phone_raw = details.get("patient_phone", "")
+        if not phone_raw:
             return
-
-        if not patient_phone_raw.startswith("whatsapp:"):
-            patient_to = f"whatsapp:{patient_phone_raw}"
-        else:
-            patient_to = patient_phone_raw
-
-        appt_display = self._format_datetime(details.get("appointment_datetime", ""))
-        is_paid = details.get("is_paid", True)  # Default to True for backward compatibility
+            
+        staff_to = f"whatsapp:{phone_raw}" if not phone_raw.startswith("whatsapp:") else phone_raw
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
         
-        title = "अपॉइंटमेंट निरस्त एवं रिफंड सूचना" if is_paid else "अपॉइंटमेंट निरस्त सूचना"
-        refund_line = f"💳 *Refund details:* आपका भुगतान सफलतापूर्वक निरस्त कर दिया गया है। आपकी राशि **3 working days** के भीतर आपके बैंक खाते में वापस (refund) आ जाएगी।\n\n" if is_paid else ""
-
+        doc_name = details.get("doctor_name", "Doctor")
+        reason = details.get("reason", "Hospital administrative reason")
+        is_paid = details.get("payment_status", "PENDING") == "PAID"
+        
         message_body = (
-            f"🏥 *CP Tiwari Hospital*\n"
-            f"❌ *{title} (Appointment Cancelled)*\n\n"
+            f"🏥 *{details.get('hospital_name', 'Hospital')} — Appointment Cancelled*\n\n"
             f"नमस्ते {details.get('patient_name', '')} जी,\n"
-            f"आपकी डॉक्टर अपॉइंटमेंट रद्द (Cancel) कर दी गई है।\n\n"
-            f"👨‍⚕️ *डॉक्टर:* {details.get('doctor_name', 'N/A')}\n"
-            f"📅 *समय:* {appt_display}\n"
-            f"🚫 *कारण:* {details.get('reason', 'अस्पताल के अनुरोध पर')}\n\n"
-            f"{refund_line}"
-            f"यदि आप नई अपॉइंटमेंट बुक करना चाहते हैं, तो कृपया अस्पताल के हेल्पलाइन नंबर पर संपर्क करें।\n"
-            f"_— CP Tiwari Hospital टीम_"
+            f"आपका डॉ. {doc_name} के साथ अपॉइंटमेंट कैंसिल कर दिया गया है।\n"
+            f"*कारण:* {reason}\n"
         )
-
+        
+        if is_paid:
+            message_body += f"\n💰 *Refund Info:* चूँकि आपने भुगतान (Payment) कर दिया था, आपका रिफंड (Refund) प्रोसेस कर दिया गया है। यह राशि **5 working days** के भीतर आपके बैंक खाते में वापस आ जाएगी।\n"
+            
+        message_body += f"\nअसुविधा के लिए हमें खेद है।\n_— {details.get('hospital_name', 'Hospital')} टीम_"
+        
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            _whatsapp_executor,
-            self._send_sync,
-            patient_to,
-            message_body
-        )
-
-
+        await loop.run_in_executor(_whatsapp_executor, self._send_sync, staff_to, message_body, client, from_number)
 
     async def send_staff_credentials_notification(self, details: dict) -> None:
         """
-        Admins ke naya staff (Doctor/Receptionist) add karne par credentials WhatsApp par bhejo.
+        Flow 2 & 3: Admins ke naya staff (Doctor/Receptionist) add karne par credentials WhatsApp par bhejo.
         """
         phone_raw = details.get("phone", "")
         if not phone_raw:
@@ -327,12 +401,14 @@ class WhatsAppNotificationService:
         else:
             staff_to = phone_raw
 
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
         role_label = "डॉक्टर (Doctor)" if details.get("role") == "DOCTOR" else "रिसेप्शनिस्ट (Receptionist)"
 
         message_body = (
             f"🏥 *{details.get('hospital_name', 'CP Tiwari Hospital')} — Staff Registration Alert*\n\n"
             f"नमस्ते {details.get('staff_name', '')} जी,\n"
-            f"आपको हमारे अस्पताल में **{role_label}** के रूप में रजिस्टर कर दिया गया है।\n\n"
+            f"आपको हमारे hospital में **{role_label}** के रूप में register कर दिया गया है।\n\n"
             f"🔑 *आपके लॉगिन क्रेडेंशियल्स (Credentials):*\n"
             f"• *Hospital ID:* `{details.get('hospital_id', 'hosp_default')}`\n"
             f"• *Username:* `{details.get('username')}`\n"
@@ -347,41 +423,36 @@ class WhatsAppNotificationService:
             _whatsapp_executor,
             self._send_sync,
             staff_to,
-            message_body
+            message_body,
+            client,
+            from_number
         )
 
-
-
     async def send_prescription_notification(self, details: dict) -> None:
-        """
-        Consultation complete hone par patient ke WhatsApp par clinical summary & prescription details bhejo.
-        """
+        """Send prescription details to the patient's WhatsApp after consultation is complete."""
         phone_raw = details.get("phone", "")
         if not phone_raw:
             logger.warning("Prescription WhatsApp skipped: phone not available.")
             return
 
+        # Ensure whatsapp: prefix
         if not phone_raw.startswith("whatsapp:"):
             patient_to = f"whatsapp:{phone_raw}"
         else:
             patient_to = phone_raw
 
-        clinical_notes = details.get("clinical_notes") or "Diagnosis completed."
-        prescription = details.get("prescription") or "Medicines as advised by the doctor."
-        follow_up = details.get("follow_up_date") or "आवश्यकतानुसार (As needed)"
+        hosp_id, hosp_name = await self._resolve_hospital_info(details)
+        client, from_number = await self._get_client_for_hospital(hosp_id)
 
         message_body = (
-            f"🏥 *{details.get('hospital_name', 'Hospital')} — Prescription & Visit Summary*\n\n"
-            f"नमस्ते {details.get('patient_name', 'Patient')} जी,\n"
-            f"आपके आज के परामर्श (Consultation) की जानकारी नीचे दी गई है:\n\n"
-            f"🩺 *डॉक्टर (Doctor):* {details.get('doctor_name', 'Doctor')}\n"
-            f"📋 *क्लीनिकल समरी (Clinical Notes):*\n"
-            f"{clinical_notes}\n\n"
-            f"💊 *दवाइयां (Prescription):*\n"
-            f"{prescription}\n\n"
-            f"📅 *फॉलो-अप तारीख (Follow-up Date):* {follow_up}\n\n"
-            f"अपना ख्याल रखें!\n"
-            f"_— {details.get('hospital_name', 'Hospital')} टीम_"
+            f"🏥 *{details.get('hospital_name', 'Hospital')}*\n"
+            f"✅ *डॉ. {details.get('doctor_name', '')} की सलाह (Prescription)*\n\n"
+            f"नमस्ते {details.get('patient_name', '')} जी,\n"
+            f"आपकी अपॉइंटमेंट सफलतापूर्वक पूरी हो गई है। डॉक्टर का पर्चा नीचे दिया गया है:\n\n"
+            f"📝 *क्लिनिकल नोट्स:*\n{details.get('clinical_notes', 'N/A')}\n\n"
+            f"💊 *दवाइयां:*\n{details.get('prescription', 'N/A')}\n\n"
+            f"📅 *अगली जांच (Follow-up):* {details.get('follow_up_date', 'N/A')}\n\n"
+            f"स्वस्थ रहें! 🙏"
         )
 
         loop = asyncio.get_event_loop()
@@ -389,12 +460,14 @@ class WhatsAppNotificationService:
             _whatsapp_executor,
             self._send_sync,
             patient_to,
-            message_body
+            message_body,
+            client,
+            from_number
         )
 
     async def send_custom_notification(self, to_phone: str, message: str) -> None:
         """
-        Sends a custom free-form WhatsApp notification.
+        Flow 1: Used to send onboarding or generic notifications via shared number.
         """
         if not to_phone:
             logger.warning("WhatsApp skipped: phone not available.")
@@ -414,73 +487,5 @@ class WhatsAppNotificationService:
         )
 
     async def send_daily_summary(self, hospital_id: str = "hosp_default") -> None:
-        """
-        Subah ek baar aaj ka poora schedule WhatsApp par bhejo.
-        Isko scheduler se call kar sakte ho ya cron job se.
-        """
-        if not self._is_configured():
-            return
-
-        try:
-            from datetime import date, datetime
-            from sqlalchemy import select, and_
-            from app.database.session import async_session_factory
-            from app.database.models.appointment import Appointment, Patient, Doctor
-
-            today = date.today()
-            today_display = today.strftime("%d %B %Y, %A")
-
-            async with async_session_factory() as db:
-                start_dt = datetime.combine(today, datetime.min.time())
-                end_dt = datetime.combine(today, datetime.max.time())
-
-                stmt = (
-                    select(Appointment, Patient, Doctor)
-                    .join(Patient, Appointment.patient_id == Patient.id)
-                    .join(Doctor, Appointment.doctor_id == Doctor.id)
-                    .where(
-                        and_(
-                            Appointment.hospital_id == hospital_id,
-                            Appointment.appointment_datetime >= start_dt,
-                            Appointment.appointment_datetime <= end_dt,
-                            Appointment.status.in_(["SCHEDULED", "PENDING_PAYMENT"])
-                        )
-                    )
-                    .order_by(Doctor.first_name, Appointment.appointment_datetime)
-                )
-                results = (await db.execute(stmt)).all()
-
-            if not results:
-                message_body = (
-                    f"🏥 *CP Tiwari Hospital*\n"
-                    f"📅 *आज का Schedule — {today_display}*\n\n"
-                    f"आज कोई अपॉइंटमेंट नहीं है।"
-                )
-            else:
-                lines = [
-                    f"🏥 *CP Tiwari Hospital*",
-                    f"📅 *आज का Schedule — {today_display}*",
-                    f"कुल अपॉइंटमेंट: *{len(results)}*\n",
-                ]
-                current_doc = None
-                for appt, patient, doctor in results:
-                    doc_name = f"Dr. {doctor.first_name} {doctor.last_name}"
-                    if doc_name != current_doc:
-                        lines.append(f"\n👨‍⚕️ *{doc_name}*")
-                        current_doc = doc_name
-                    time_str = appt.appointment_datetime.strftime("%I:%M %p")
-                    patient_name = f"{patient.first_name} {patient.last_name}".strip()
-                    lines.append(f"  • {time_str} — {patient_name} ({patient.phone})")
-
-                message_body = "\n".join(lines)
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                _whatsapp_executor,
-                self._send_sync,
-                self.receptionist_number,
-                message_body
-            )
-
-        except Exception as e:
-            logger.error(f"WhatsApp daily summary failed: {str(e)}")
+        """Disabled: Only 5 core notification flows allowed."""
+        pass

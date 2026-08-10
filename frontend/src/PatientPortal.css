@@ -1,0 +1,356 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+.patient-portal {
+  min-height: 100vh;
+  width: 100vw;
+  flex: 1;
+  background: var(--bg-main, #F5F9FF);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--text-main, #0F172A);
+  position: relative;
+  overflow-x: hidden;
+}
+
+.p-header {
+  background: #FFFFFF;
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1.5px solid #E2E8F0;
+}
+
+.p-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 800;
+  font-size: 1.5rem;
+  color: #0F172A;
+  letter-spacing: -0.5px;
+}
+
+.p-icon {
+  color: #2563EB;
+  background: #E8F1FF;
+  padding: 8px;
+  border-radius: 12px;
+  display: flex;
+}
+
+.p-main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 30px 20px;
+  position: relative;
+  z-index: 10;
+}
+
+/* Auth Container */
+.p-auth-container {
+  background: #FFFFFF;
+  padding: 40px;
+  border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+  border: 1px solid #E2E8F0;
+  text-align: center;
+  margin-top: 40px;
+}
+
+.p-auth-container h2 {
+  margin-top: 0;
+  color: #0F172A;
+  font-weight: 800;
+  font-size: 2rem;
+  letter-spacing: -0.5px;
+}
+
+.p-auth-container p {
+  color: #64748B;
+  font-size: 1.1rem;
+}
+
+.p-form {
+  margin-top: 28px;
+  text-align: left;
+}
+
+.p-input-group {
+  margin-bottom: 20px;
+}
+
+.p-input-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #334155;
+}
+
+.p-input-group input, .p-input, .p-textarea {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1.5px solid #CBD5E1 !important;
+  border-radius: 12px;
+  font-size: 16px;
+  font-family: inherit;
+  box-sizing: border-box;
+  background: #FFFFFF !important;
+  color: #0F172A !important;
+  transition: all 0.2s ease;
+}
+
+.p-input-group input:focus, .p-input:focus, .p-textarea:focus {
+  outline: none !important;
+  border-color: #2563EB !important;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15) !important;
+}
+
+.p-textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.p-btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.p-btn-primary {
+  background: #2563EB !important;
+  color: white !important;
+  height: 48px;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
+.p-btn-primary:hover {
+  background: #1D4ED8 !important;
+}
+
+.p-btn-text {
+  background: transparent;
+  color: #334155;
+  margin-top: 12px;
+}
+
+.p-btn-text:hover {
+  background: #EEF4FF;
+  color: #0F172A;
+}
+
+.p-error-text {
+  color: #DC2626;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  background: #FEE2E2;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border-left: 4px solid #DC2626;
+}
+
+.p-note {
+  margin-top: 20px;
+  font-size: 13px;
+  color: #64748B;
+  text-align: center;
+  font-weight: 500;
+}
+
+/* Dashboard */
+.p-dashboard {
+  background: #FFFFFF;
+  border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+  border: 1px solid #E2E8F0;
+  overflow: hidden;
+}
+
+.p-welcome {
+  padding: 24px 30px;
+  background: #F8FAFC;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.p-welcome h3 {
+  margin: 0;
+  color: #0F172A;
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.p-tabs {
+  display: flex;
+  background: white;
+  border-bottom: 1px solid #E2E8F0;
+  padding: 0 16px;
+}
+
+.p-tabs button {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 16px 12px;
+  font-weight: 600;
+  font-size: 15px;
+  color: #64748B;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.p-tabs button:hover {
+  color: #0F172A;
+  background: #E8F1FF;
+}
+
+.p-tabs button.active {
+  color: #2563EB;
+  border-bottom-color: #2563EB;
+  background: #E8F1FF;
+  font-weight: 700;
+}
+
+.p-tab-content {
+  padding: 24px 30px;
+  background: white;
+}
+
+/* Cards */
+.p-card {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 20px;
+  margin-bottom: 20px;
+  padding: 20px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+}
+
+.p-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #E2E8F0;
+}
+
+.p-card-header strong {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.p-status {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.p-card-body div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #334155;
+  font-size: 15px;
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.p-card-body div svg {
+  color: #2563EB;
+  background: #E8F1FF;
+  padding: 6px;
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+}
+
+.p-doc-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.p-doc-item {
+  border: 1.5px solid #E2E8F0;
+  padding: 16px;
+  border-radius: 16px;
+  cursor: pointer;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.p-doc-item.selected {
+  border-color: #2563EB;
+  background: #E8F1FF;
+}
+
+.p-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.p-slot-btn {
+  background: white;
+  border: 1.5px solid #CBD5E1;
+  padding: 12px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0F172A;
+}
+
+.p-slot-btn:hover:not(:disabled) {
+  border-color: #2563EB;
+  color: #2563EB;
+  background: #E8F1FF;
+}
+
+.p-slot-btn.selected {
+  background: #16A34A !important;
+  border-color: #16A34A !important;
+  color: white !important;
+}
+
+.p-slot-btn:disabled, .p-slot-btn.booked {
+  background: #FEE2E2 !important;
+  border-color: #FCA5A5 !important;
+  color: #DC2626 !important;
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
+.p-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: #64748B;
+  background: #F8FAFC;
+  border-radius: 16px;
+  border: 1px dashed #CBD5E1;
+  font-weight: 600;
+}

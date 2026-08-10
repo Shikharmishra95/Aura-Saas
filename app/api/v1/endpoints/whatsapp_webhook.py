@@ -10,6 +10,7 @@ Twilio Console mein WhatsApp Sandbox webhook set karo:
   Method: POST
 """
 
+from typing import Optional
 from fastapi import APIRouter, Form, Response
 from app.services.whatsapp_intake import get_intake_service
 from app.core.logging import logger
@@ -23,6 +24,7 @@ async def whatsapp_incoming_webhook(
     Body: str = Form(...),          # Patient ka message
     MessageSid: str = Form(None),   # Twilio Message SID
     To: str = Form(None),           # Our WhatsApp number
+    hospital_id: Optional[str] = None,
 ):
     """
     Twilio WhatsApp incoming message webhook.

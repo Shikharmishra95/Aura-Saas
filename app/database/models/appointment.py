@@ -136,6 +136,7 @@ class DoctorLeave(Base):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), server_default="PENDING", default="PENDING", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -183,6 +184,9 @@ class Patient(Base):
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     insurance_provider_id: Mapped[Optional[str]] = mapped_column(ForeignKey("insurance_providers.id", ondelete="SET NULL"), nullable=True)
     insurance_policy_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    otp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    otp_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -201,8 +205,12 @@ class Appointment(Base):
     appointment_datetime: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
     status: Mapped[str] = mapped_column(String(50), default="SCHEDULED")
+    payment_status: Mapped[str] = mapped_column(String(50), default="PENDING")
+    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="ONLINE")
+    consultation_status: Mapped[str] = mapped_column(String(50), default="PENDING")
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(50), default="VOICE")
+    booked_by_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # Name of account holder who booked (for family bookings)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

@@ -102,6 +102,7 @@ class AppointmentRead(AppointmentBase):
     patient_id: str
     doctor_id: str
     status: str
+    warning: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -126,6 +127,7 @@ class DoctorLeaveCreate(BaseModel):
     start_date: date
     end_date: date
     reason: Optional[str] = None
+    status: Optional[str] = "PENDING"
 
 
 class DoctorLeaveRead(BaseModel):
@@ -135,6 +137,7 @@ class DoctorLeaveRead(BaseModel):
     start_date: date
     end_date: date
     reason: Optional[str]
+    status: str
     created_at: datetime
     updated_at: datetime
 
