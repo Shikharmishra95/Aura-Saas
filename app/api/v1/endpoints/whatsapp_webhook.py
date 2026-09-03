@@ -1,15 +1,3 @@
-"""
-WhatsApp Webhook Endpoint
-===========================
-Twilio se incoming WhatsApp messages receive karta hai.
-Agar message kisi active intake session se match kare → WhatsAppIntakeService handle karta hai.
-Baaki messages ko ignore karta hai (ya future mein other bots ke liye extend kar sakte hain).
-
-Twilio Console mein WhatsApp Sandbox webhook set karo:
-  URL: https://<your-domain>/whatsapp/webhook
-  Method: POST
-"""
-
 from typing import Optional
 from fastapi import APIRouter, Form, Response
 from app.services.whatsapp_intake import get_intake_service

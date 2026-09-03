@@ -3,6 +3,7 @@ import DoctorQueue from './components/doctor/DoctorQueue';
 import Header from './components/common/Header';
 import Sidebar from './components/common/Sidebar';
 import PatientProfileModal from './components/common/Modals/PatientProfileModal';
+import ProfileModal from './components/common/ProfileModal';
 import ControlTower from './components/superadmin/ControlTower';
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
@@ -288,6 +289,20 @@ const TRANSLATIONS = {
   }
 };
 
+export const formatDoctorTimingsToEnglish = (timings) => {
+  if (!timings) return 'Mon – Sat: 10:00 AM – 01:00 PM';
+  return timings
+    .replace(/सोम–शनि/g, 'Mon–Sat')
+    .replace(/सोम–शुक्र/g, 'Mon–Fri')
+    .replace(/सोम/g, 'Mon')
+    .replace(/मंगल/g, 'Tue')
+    .replace(/बुध/g, 'Wed')
+    .replace(/गुरु/g, 'Thu')
+    .replace(/शुक्र/g, 'Fri')
+    .replace(/शनि/g, 'Sat')
+    .replace(/रवि/g, 'Sun');
+};
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('jwt_token') || '');
   const [userRole, setUserRole] = useState(localStorage.getItem('user_role') || '');
@@ -408,6 +423,7 @@ function App() {
   const [doctorQueueSearch, setDoctorQueueSearch] = useState('');
   // Active Hospital Profile & Settings
   const [activeHospital, setActiveHospital] = useState(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   
   // New Booking Slots Grid state
   const [newBookingBookedSlots, setNewBookingBookedSlots] = useState([]);
@@ -2091,6 +2107,7 @@ function App() {
           handleSearchPatients={handleSearchPatients}
           setSelectedPatientRecord={setSelectedPatientRecord}
           activeHospital={activeHospital}
+          onOpenProfile={() => setIsProfileModalOpen(true)}
           t={t}
         />
       )}
@@ -2598,7 +2615,7 @@ function App() {
                                       </span>
                                     </div>
                                     <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600, marginTop: '2px' }}>
-                                      OPD Fee: <strong style={{ color: '#2563EB' }}>₹{docFee}</strong> • Timings: {doc.timings || '10:00 AM - 01:00 PM'}
+                                      OPD Fee: <strong style={{ color: '#2563EB' }}>₹{docFee}</strong> • Timings: {formatDoctorTimingsToEnglish(doc.timings)}
                                     </div>
                                   </div>
                                 </div>
@@ -2851,7 +2868,7 @@ function App() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                         {(Array.isArray(doctorsList) ? doctorsList : []).map(doc => {
                           // Define fallback timing and fees
-                          const timingStr = doc.timings || t('default_schedule');
+                          const timingStr = formatDoctorTimingsToEnglish(doc.timings);
                           const feesStr = doc.opd_fees ? `₹${doc.opd_fees}` : "₹500";
                           
                           // Check if doctor works on selectedScheduleDate
@@ -3884,6 +3901,7 @@ function App() {
                     username={username}
                     lang={lang}
                     toggleLanguage={toggleLanguage}
+                    onOpenProfile={() => setIsProfileModalOpen(true)}
                     t={t}
                   />
                 );
@@ -5576,6 +5594,17 @@ function App() {
         </div>
         );
       })()}
+
+      {/* Universal Profile & Self-Password Management Modal */}
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        token={token}
+        username={username}
+        userRole={userRole}
+        activeHospital={activeHospital}
+        t={t}
+      />
 
       {/* Footer */}
       <footer style={{ padding: '20px', borderTop: '1px solid var(--border-color)', fontSize: '13px', color: 'var(--text-muted)' }}>

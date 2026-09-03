@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.core.dependencies import create_access_token, verify_password, get_current_user, hash_password
 from app.database.models.call_log import User, Role, UserRole
-from app.database.models.appointment import Hospital, Department, HospitalSetting
+from app.database.models.appointment import Hospital, Department, HospitalSetting, Doctor, DoctorSchedule
 
 router = APIRouter(tags=["auth"])
 
@@ -305,3 +305,110 @@ async def register_super_admin(
         "message": "New Platform Owner account registered successfully.",
         "username": username
     }
+
+
+@router.get("/auth/me", tags=["auth"])
+async def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns full profile details of currently authenticated user across all roles.
+    """
+    role_stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
+    roles = (await db.execute(role_stmt)).scalars().all()
+    primary_role = roles[0] if roles else ("SUPER_ADMIN" if current_user.hospital_id == "super_admin" or not current_user.hospital_id else "RECEPTIONIST")
+
+    hosp_name = "AURA SaaS Platform"
+    hosp_code = current_user.hospital_id or "PLATFORM-ROOT"
+    if current_user.hospital_id:
+        h_stmt = select(Hospital).where(Hospital.id == current_user.hospital_id)
+        hosp = (await db.execute(h_stmt)).scalar_one_or_none()
+        if hosp:
+            hosp_name = hosp.name
+            hosp_code = hosp.id
+
+    profile_data = {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email or "",
+        "first_name": current_user.first_name or "",
+        "last_name": current_user.last_name or "",
+        "role": primary_role,
+        "hospital_id": current_user.hospital_id,
+        "hospital_name": hosp_name,
+        "hospital_code": hosp_code
+    }
+
+    # If Doctor, enrich with clinical profile
+    if primary_role == "DOCTOR":
+        doc_stmt = select(Doctor, Department).join(Department, Doctor.department_id == Department.id).where(Doctor.id == current_user.id)
+        doc_res = (await db.execute(doc_stmt)).first()
+        if doc_res:
+            doc, dept = doc_res
+            profile_data["first_name"] = doc.first_name
+            profile_data["last_name"] = doc.last_name
+            profile_data["email"] = doc.email or profile_data["email"]
+            profile_data["phone"] = doc.phone or ""
+            profile_data["department_name"] = dept.name if dept else "General OPD"
+            profile_data["opd_fees"] = doc.opd_fees or 400
+            profile_data["license_number"] = doc.license_number or ""
+
+    return profile_data
+
+
+@router.post("/auth/change-password", tags=["auth"])
+async def change_my_password(
+    current_password: str = Form(..., description="Current active password"),
+    new_password: str = Form(..., description="New password to set (min 6 chars)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Allows any logged-in user (Doctor, Receptionist, Admin, SuperAdmin) to update their password.
+    Synchronizes both users.password_hash (bcrypt) and hospital_settings (staff directory display).
+    """
+    if len(new_password.strip()) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters long.")
+
+    # 1. Verify current password against database hash
+    if not verify_password(current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password entered is incorrect.")
+
+    # 2. Update users table password_hash
+    current_user.password_hash = hash_password(new_password.strip())
+    db.add(current_user)
+
+    # 3. If user belongs to a hospital, update hospital_settings staff_pwd reference
+    if current_user.hospital_id:
+        pwd_setting_stmt = select(HospitalSetting).where(
+            HospitalSetting.hospital_id == current_user.hospital_id,
+            HospitalSetting.setting_key == f"staff_pwd_{current_user.id}"
+        )
+        pwd_setting = (await db.execute(pwd_setting_stmt)).scalar_one_or_none()
+        if pwd_setting:
+            pwd_setting.setting_value = new_password.strip()
+            db.add(pwd_setting)
+        else:
+            new_setting = HospitalSetting(
+                id=str(uuid.uuid4()),
+                hospital_id=current_user.hospital_id,
+                setting_key=f"staff_pwd_{current_user.id}",
+                setting_value=new_password.strip()
+            )
+            db.add(new_setting)
+
+    # Also update doctor hashed_password if user is a doctor
+    doc_stmt = select(Doctor).where(Doctor.id == current_user.id)
+    doctor = (await db.execute(doc_stmt)).scalar_one_or_none()
+    if doctor:
+        doctor.hashed_password = hash_password(new_password.strip())
+        db.add(doctor)
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": "Password updated successfully in real-time."
+    }
+

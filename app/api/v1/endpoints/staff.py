@@ -335,7 +335,7 @@ async def list_doctors(
             parts = []
             for tr, days_list in session_times.items():
                 days_list.sort()
-                day_names_map = {1: "सोम", 2: "मंगल", 3: "बुध", 4: "गुरु", 5: "शुक्र", 6: "शनि", 7: "रवि"}
+                day_names_map = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
                 if len(days_list) >= 5 and days_list == list(range(days_list[0], days_list[0] + len(days_list))):
                     days_str = f"{day_names_map.get(days_list[0])}–{day_names_map.get(days_list[-1])}"
                 else:
@@ -343,8 +343,8 @@ async def list_doctors(
                 parts.append(f"{days_str}, {tr}")
             timing_str = " | ".join(parts)
         else:
-            timing_str = "सोम–शुक्र, 10:00 AM - 01:00 PM | 02:00 PM - 05:00 PM"
-            work_days = [1, 2, 3, 4, 5]
+            timing_str = "Mon–Sat, 10:00 AM - 01:00 PM"
+            work_days = [1, 2, 3, 4, 5, 6]
 
         distinct_sessions = sorted(list(set([(s.start_time, s.end_time) for s in schedules])), key=lambda x: x[0]) if schedules else []
         s1_start = distinct_sessions[0][0].strftime("%H:%M") if len(distinct_sessions) > 0 else "10:00"
@@ -430,7 +430,7 @@ async def list_hospital_staff(
             parts = []
             for tr, days_list in session_times.items():
                 days_list.sort()
-                day_names_map = {1: "सोम", 2: "मंगल", 3: "बुध", 4: "गुरु", 5: "शुक्र", 6: "शनि", 7: "रवि"}
+                day_names_map = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
                 if len(days_list) >= 5 and days_list == list(range(days_list[0], days_list[0] + len(days_list))):
                     days_str = f"{day_names_map.get(days_list[0])}–{day_names_map.get(days_list[-1])}"
                 else:

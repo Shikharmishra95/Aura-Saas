@@ -31,12 +31,27 @@ export default function DoctorQueue({
   username,
   lang,
   toggleLanguage,
+  onOpenProfile,
   t
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [globalSearchTerm, setGlobalSearchTerm] = useState('');
   const [showGlobalDropdown, setShowGlobalDropdown] = useState(false);
   const [historyModalAppt, setHistoryModalAppt] = useState(null);
+
+  const formatDoctorTimingsToEnglish = (timings) => {
+    if (!timings) return 'Mon – Sat: 10:00 AM – 01:00 PM';
+    return timings
+      .replace(/सोम–शनि/g, 'Mon–Sat')
+      .replace(/सोम–शुक्र/g, 'Mon–Fri')
+      .replace(/सोम/g, 'Mon')
+      .replace(/मंगल/g, 'Tue')
+      .replace(/बुध/g, 'Wed')
+      .replace(/गुरु/g, 'Thu')
+      .replace(/शुक्र/g, 'Fri')
+      .replace(/शनि/g, 'Sat')
+      .replace(/रवि/g, 'Sun');
+  };
 
   // Helper to format Slot Time cleanly
   const formatSlotTime = (appt) => {
@@ -265,7 +280,7 @@ export default function DoctorQueue({
                 OPD Hours
               </div>
               <div style={{ fontSize: '12px', fontWeight: 800, color: '#FFFFFF' }}>
-                {doctorTimings || 'Mon – Sat: 10:00 AM – 01:00 PM'}
+                {formatDoctorTimingsToEnglish(doctorTimings)}
               </div>
             </div>
           </div>
@@ -294,23 +309,30 @@ export default function DoctorQueue({
             </button>
           )}
 
-          {/* Doctor Profile Name Badge */}
-          <div style={{
-            background: 'rgba(56, 189, 248, 0.15)',
-            border: '1px solid rgba(56, 189, 248, 0.35)',
-            borderRadius: '10px',
-            padding: '6px 12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}>
+          {/* Doctor Profile Button */}
+          <button
+            onClick={onOpenProfile}
+            style={{
+              background: 'rgba(56, 189, 248, 0.15)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              borderRadius: '10px',
+              padding: '6px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              color: '#E0F2FE',
+              transition: 'all 0.15s'
+            }}
+            title="View My Profile & Change Password"
+          >
             <span style={{ fontSize: '9px', fontWeight: 900, background: '#38BDF8', color: '#0F172A', padding: '2px 5px', borderRadius: '4px', textTransform: 'uppercase' }}>
               DOCTOR
             </span>
             <span style={{ fontSize: '12px', fontWeight: 800, color: '#E0F2FE' }}>
-              {username || 'Dr. Account'}
+              👤 {username || 'Dr. Account'}
             </span>
-          </div>
+          </button>
 
           {/* Logout Button */}
           {logout && (

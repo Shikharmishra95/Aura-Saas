@@ -20,16 +20,16 @@ async def seed_cp_tiwari():
         if not hospital:
             hospital = Hospital(
                 id="hosp_default",
-                name="CP Tiwari Hospital",
-                slug="cp-tiwari-hospital",
+                name="Balaji Hospital",
+                slug="balaji-hospital",
                 phone=twilio_number,
-                email="contact@cptiwarihospital.com",
+                email="contact@balajihospital.com",
                 timezone="Asia/Kolkata",
                 is_active=True
             )
             db.add(hospital)
             await db.flush()
-            print(f"Hospital 'CP Tiwari Hospital' seeded with phone {twilio_number}.")
+            print(f"Hospital 'Balaji Hospital' seeded with phone {twilio_number}.")
         else:
             hospital.name = "CP Tiwari Hospital"
             hospital.slug = "cp-tiwari-hospital"

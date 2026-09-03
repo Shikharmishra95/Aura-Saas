@@ -15,6 +15,7 @@ export default function Header({
   handleSearchPatients,
   setSelectedPatientRecord,
   activeHospital,
+  onOpenProfile,
   t
 }) {
   return (
@@ -236,7 +237,26 @@ export default function Header({
             }}>
               {userRole === 'SUPER_ADMIN' ? 'Platform Owner' : userRole}
             </span>
-            <span style={{ fontWeight: 800, color: '#0F172A', fontSize: '12px' }}>{username}</span>
+            <button
+              onClick={onOpenProfile}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: '#EFF6FF',
+                color: '#1E40AF',
+                border: '1px solid #BFDBFE',
+                padding: '3px 8px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 800,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+              title="View Profile & Change Password"
+            >
+              👤 {username}
+            </button>
             <button 
               onClick={logout} 
               style={{
