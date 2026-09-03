@@ -64,6 +64,13 @@ async def handle_inbound_call(
             )
             return Response(content=fallback_twiml, media_type="text/xml")
 
+        if not hospital.is_active:
+            twilio_logger.warning(f"Hospital {hospital.name} ({hospital.id}) is INACTIVE. Rejecting incoming voice call.")
+            inactive_twiml = twilio_service.generate_hangup_twiml(
+                "क्षमा करें, यह अस्पताल खाता वर्तमान में निष्क्रिय है। कृपया बाद में प्रयास करें।"
+            )
+            return Response(content=inactive_twiml, media_type="text/xml")
+
         hospital_id = hospital.id
 
         # 3. Create Call Log Record
@@ -317,11 +324,24 @@ async def handle_voice_stream(websocket: WebSocket, voice_session_id: str, db: A
             return
         
         caller_number = call_log.caller_number if call_log else ""
-        # Resolve the patient's phone number: if From is Twilio number (outbound), use receiver (To) number
-        if call_log and call_log.caller_number == settings.TWILIO_PHONE_NUMBER:
-            resolved_patient_phone = call_log.receiver_number
+        receiver_number = call_log.receiver_number if call_log else ""
+
+        # Check hospital phone / Twilio helpline numbers
+        hosp_obj = None
+        if hospital_id:
+            hosp_stmt = select(Hospital).where(Hospital.id == hospital_id)
+            hosp_obj = (await db.execute(hosp_stmt)).scalar_one_or_none()
+
+        is_caller_hospital = (
+            caller_number == settings.TWILIO_PHONE_NUMBER or
+            (hosp_obj and (caller_number == hosp_obj.phone or caller_number == hosp_obj.helpline))
+        )
+        
+        # If caller is the hospital (outbound call), patient is the receiver; otherwise patient is the caller
+        if is_caller_hospital and receiver_number:
+            resolved_patient_phone = receiver_number
         else:
-            resolved_patient_phone = caller_number
+            resolved_patient_phone = caller_number or receiver_number
         caller_phone = resolved_patient_phone
 
         # Resolve custom credentials for Twilio redirects
@@ -528,12 +548,14 @@ async def handle_voice_stream(websocket: WebSocket, voice_session_id: str, db: A
                                 first_name = name_parts[0]
                                 last_name = name_parts[1] if len(name_parts) > 1 else ""
 
-                                if caller_phone:
+                                effective_phone = args.get("patient_phone") or args.get("phone") or caller_phone or "0000000000"
+                                if effective_phone and effective_phone != "0000000000":
+                                    phone_clean = effective_phone.replace("+91", "").strip()
                                     pt_stmt = select(Patient).where(
                                         Patient.hospital_id == hospital_id,
-                                        Patient.phone == caller_phone
+                                        or_(Patient.phone == effective_phone, Patient.phone == f"+91{phone_clean}", Patient.phone.contains(phone_clean))
                                     )
-                                    patient = (await db.execute(pt_stmt)).scalar_one_or_none()
+                                    patient = (await db.execute(pt_stmt)).scalars().first()
 
                                 if not patient:
                                     new_patient = Patient(
@@ -541,14 +563,14 @@ async def handle_voice_stream(websocket: WebSocket, voice_session_id: str, db: A
                                         hospital_id=hospital_id,
                                         first_name=first_name,
                                         last_name=last_name,
-                                        phone=caller_phone or "0000000000",
+                                        phone=effective_phone,
                                         date_of_birth=date_type(1990, 1, 1),
                                         gender="Unknown"
                                     )
                                     db.add(new_patient)
                                     await db.flush()
                                     patient = new_patient
-                                    twilio_logger.info(f"Created new patient for caller: {caller_phone}, name: {patient_name_raw}")
+                                    twilio_logger.info(f"Created new patient for caller: {effective_phone}, name: {patient_name_raw}")
                                 else:
                                     if first_name and patient.first_name != first_name:
                                         patient.first_name = first_name

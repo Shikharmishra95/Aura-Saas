@@ -12,10 +12,15 @@ class Hospital(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    phone: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    subscription_plan: Mapped[str] = mapped_column(String(50), default="STARTER")
+    max_doctors: Mapped[int] = mapped_column(Integer, default=1)
+    ai_voice_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    plan_status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
+    plan_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -211,6 +216,8 @@ class Appointment(Base):
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(50), default="VOICE")
     booked_by_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # Name of account holder who booked (for family bookings)
+    patient_name_override: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # Name of actual patient when booked for family
+    reschedule_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

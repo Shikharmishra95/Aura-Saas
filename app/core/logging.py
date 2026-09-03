@@ -12,6 +12,7 @@ LOG_FILE = LOG_DIR / "hospital_voice_receptionist.log"
 import contextvars
 
 request_id_context = contextvars.ContextVar("request_id", default=None)
+correlation_id_context = contextvars.ContextVar("correlation_id", default=None)
 hospital_id_context = contextvars.ContextVar("hospital_id", default=None)
 
 def setup_logging():
@@ -24,10 +25,13 @@ def setup_logging():
     class TraceFilter(logging.Filter):
         def filter(self, record):
             req_id = request_id_context.get()
+            corr_id = correlation_id_context.get()
             hosp_id = hospital_id_context.get()
             meta_parts = []
             if req_id:
                 meta_parts.append(f"req_{req_id}")
+            if corr_id and corr_id != req_id:
+                meta_parts.append(f"corr_{corr_id}")
             if hosp_id:
                 meta_parts.append(f"hosp_{hosp_id}")
             
@@ -51,8 +55,15 @@ def setup_logging():
     stdout_handler.addFilter(TraceFilter())
     root_logger.addHandler(stdout_handler)
 
-    # File Handler (Rotating)
-    file_handler = RotatingFileHandler(
+    # Windows-Safe Rotating File Handler
+    class SafeRotatingFileHandler(RotatingFileHandler):
+        def doRollover(self):
+            try:
+                super().doRollover()
+            except (PermissionError, OSError):
+                pass
+
+    file_handler = SafeRotatingFileHandler(
         LOG_FILE, maxBytes=10485760, backupCount=5, encoding="utf-8"
     )
     file_handler.setFormatter(logging.Formatter(log_format))

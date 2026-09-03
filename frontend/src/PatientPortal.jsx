@@ -132,6 +132,15 @@ export default function PatientPortal({ slug, lang = 'en' }) {
   const [bookedAppointmentId, setBookedAppointmentId] = useState(null);
   const [viewingPrescription, setViewingPrescription] = useState(null);
 
+  // Reschedule Modal State
+  const [rescheduleModalAppt, setRescheduleModalAppt] = useState(null);
+  const [rescheduleDate, setRescheduleDate] = useState(getMinDate());
+  const [rescheduleWorkingDays, setRescheduleWorkingDays] = useState([]);
+  const [rescheduleSlots, setRescheduleSlots] = useState([]);
+  const [rescheduleSlot, setRescheduleSlot] = useState('');
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState('');
+
   // Profile State
   const [profileData, setProfileData] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -140,6 +149,75 @@ export default function PatientPortal({ slug, lang = 'en' }) {
   const [editName, setEditName] = useState('');
   const [editGender, setEditGender] = useState('Male');
   const [editDob, setEditDob] = useState('');
+
+  const fetchRescheduleSlots = async (docId, date) => {
+    try {
+      const res = await fetch(`${API_BASE}/doctors/${docId}/slots?date=${date}`);
+      const data = await res.json();
+      const slotsList = Array.isArray(data.slots) ? data.slots : (data.available_slots || []);
+      setRescheduleSlots(slotsList);
+      setRescheduleSlot('');
+    } catch (e) {
+      console.error("Error fetching reschedule slots:", e);
+      setRescheduleSlots([]);
+    }
+  };
+
+  const handleOpenRescheduleModal = async (appt) => {
+    setRescheduleModalAppt(appt);
+    setRescheduleError('');
+    setRescheduleSlots([]);
+    setRescheduleSlot('');
+
+    if (appt.doctor_id) {
+      try {
+        const daysRes = await fetch(`${API_BASE}/doctors/${appt.doctor_id}/next-working-days?count=3`);
+        const daysData = await daysRes.json();
+        const workingDays = daysData.working_days || [];
+        setRescheduleWorkingDays(workingDays);
+
+        const initialDate = workingDays.length > 0 ? workingDays[0].date : getMinDate();
+        setRescheduleDate(initialDate);
+        fetchRescheduleSlots(appt.doctor_id, initialDate);
+      } catch (e) {
+        const minD = getMinDate();
+        setRescheduleDate(minD);
+        fetchRescheduleSlots(appt.doctor_id, minD);
+      }
+    }
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!rescheduleModalAppt || !rescheduleDate || !rescheduleSlot) {
+      setRescheduleError('Please select both a date and an available time slot.');
+      return;
+    }
+    setRescheduleLoading(true);
+    setRescheduleError('');
+    try {
+      const datetimeStr = `${rescheduleDate}T${rescheduleSlot}:00`;
+      const res = await fetch(`${API_BASE}/appointments/${rescheduleModalAppt.id}/reschedule`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ new_datetime: datetimeStr })
+      });
+      const data = await res.json();
+      setRescheduleLoading(false);
+      if (res.ok) {
+        alert('🎉 Appointment Rescheduled Successfully! A WhatsApp confirmation with your new date & time has been sent.');
+        setRescheduleModalAppt(null);
+        fetchAppointments();
+      } else {
+        setRescheduleError(data.detail || data.message || 'Failed to reschedule appointment.');
+      }
+    } catch (e) {
+      setRescheduleLoading(false);
+      setRescheduleError('Network error while rescheduling. Please try again.');
+    }
+  };
 
   const safeJsonParse = (str, fallback = null) => {
     if (!str || str === 'undefined') return fallback;
@@ -368,10 +446,7 @@ export default function PatientPortal({ slug, lang = 'en' }) {
       const datetimeStr = `${selectedDate}T${selectedSlot}:00`;
       const targetPatientId = patient?.id;
       
-      let finalReason = reason;
-      if (patientName) {
-        finalReason = `For: ${patientName} (Age: ${patientAge}) | Reason: ${reason}`;
-      }
+      const finalReason = reason || 'General Checkup';
 
       const res = await fetch(`${API_BASE}/appointments`, {
         method: 'POST',
@@ -383,6 +458,8 @@ export default function PatientPortal({ slug, lang = 'en' }) {
           hospital_id: hospital.id,
           doctor_id: selectedDoc.id,
           patient_id: targetPatientId,
+          patient_name: patientName || null,
+          patient_age: patientAge ? parseInt(patientAge) : null,
           appointment_datetime: datetimeStr,
           reason: finalReason,
           payment_mode: paymentMode
@@ -397,7 +474,7 @@ export default function PatientPortal({ slug, lang = 'en' }) {
                 return;
             }
             const options = {
-                key: 'rzp_test_TDfSGFZwtVgpme',
+                key: import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TDfSGFZwtVgpme',
                 amount: (selectedDoc.opd_fees || 500) * 100, // in paise
                 currency: 'INR',
                 name: hospital.name,
@@ -580,6 +657,13 @@ export default function PatientPortal({ slug, lang = 'en' }) {
                           <div><Clock size={14}/> {new Date(a.datetime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
                           <div><FileText size={14}/> {a.reason}</div>
                         </div>
+                        {a.can_reschedule && (
+                          <div className="p-card-actions" style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                            <button className="p-btn-small" style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleOpenRescheduleModal(a)}>
+                              🔄 Reschedule (1-Time)
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -615,11 +699,19 @@ export default function PatientPortal({ slug, lang = 'en' }) {
                             <Download size={14}/> View Prescription
                           </button>
                         )}
-                        {a.status === 'MISSED' && a.can_reschedule && (
-                          <button className="p-btn-small" style={{ backgroundColor: '#2563eb', color: '#fff' }} onClick={() => { setActiveTab('book'); setBookStep(1); }}>
-                            🔄 Reschedule (Available within 48h)
+                        {a.can_reschedule ? (
+                          <button className="p-btn-small" style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleOpenRescheduleModal(a)}>
+                            🔄 {a.status === 'MISSED' ? 'Reschedule Missed Appointment (1-Time)' : 'Reschedule (1-Time)'}
                           </button>
-                        )}
+                        ) : (a.reschedule_count || 0) >= 1 ? (
+                          <span style={{ fontSize: '11px', color: '#64748B', background: '#F1F5F9', padding: '4px 8px', borderRadius: '8px', fontWeight: 600 }}>
+                            🔒 Already Rescheduled (1/1 Limit)
+                          </span>
+                        ) : a.status === 'MISSED' && !a.payment_status?.includes('PAID') ? (
+                          <span style={{ fontSize: '11px', color: '#DC2626', background: '#FEF2F2', padding: '4px 8px', borderRadius: '8px', fontWeight: 600 }}>
+                            🚫 Unpaid (No Reschedule)
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     ))
@@ -845,30 +937,263 @@ export default function PatientPortal({ slug, lang = 'en' }) {
         </div>
       )}
 
-      {/* Prescription Modal */}
+      {/* ── 1. PRESCRIPTION DETAILS MODAL (PRINTABLE PDF FORMAT) ── */}
       {viewingPrescription && (
         <div className="p-modal-overlay">
-          <div className="p-modal" style={{ maxWidth: '600px', width: '90%' }}>
-            <div className="p-modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
-              <h3 style={{ margin: 0, color: '#0f172a' }}>Prescription Details</h3>
-              <button onClick={() => setViewingPrescription(null)} className="p-btn-close" style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: '#64748b' }}>&times;</button>
-            </div>
-            <div className="p-modal-body" style={{ padding: '16px 0' }}>
-              <div style={{ padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '16px' }}>
-                <h4 style={{ margin: '0 0 8px 0', color: '#0f172a', fontSize: '14px' }}>Clinical Notes</h4>
-                <p style={{ whiteSpace: 'pre-wrap', color: '#334155', margin: 0, fontSize: '14px' }}>{viewingPrescription.clinical_notes || "N/A"}</p>
+          <div className="p-modal printable-prescription" style={{ maxWidth: '650px', width: '92%', background: '#FFFFFF', borderRadius: '20px', padding: '24px' }}>
+            
+            {/* Modal Header */}
+            <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1.5px solid #E2E8F0', paddingBottom: '12px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '20px' }}>📄</span>
+                <h3 style={{ margin: 0, color: '#0F172A', fontSize: '18px', fontWeight: 800 }}>Medical Prescription</h3>
               </div>
-              
-              <div style={{ padding: '16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '16px' }}>
-                <h4 style={{ margin: '0 0 8px 0', color: '#0f172a', fontSize: '14px' }}>Prescription</h4>
-                <p style={{ whiteSpace: 'pre-wrap', color: '#334155', margin: 0, fontSize: '14px', fontFamily: 'monospace' }}>{viewingPrescription.prescription || "N/A"}</p>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button 
+                  onClick={() => window.print()}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+                    color: '#FFFFFF', border: 'none', padding: '8px 16px', borderRadius: '10px',
+                    fontWeight: 700, fontSize: '12px', cursor: 'pointer', boxShadow: '0 2px 8px rgba(37,99,235,0.25)'
+                  }}
+                >
+                  <Download size={15} /> Print / Save PDF
+                </button>
+                <button onClick={() => setViewingPrescription(null)} className="p-btn-close">&times;</button>
+              </div>
+            </div>
+
+            {/* Official Hospital Prescription Letterhead */}
+            <div style={{ border: '2px solid #E2E8F0', borderRadius: '16px', padding: '20px', background: '#FFFFFF' }}>
+              {/* Hospital Banner */}
+              <div style={{ borderBottom: '2px solid #2563EB', paddingBottom: '14px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h2 style={{ margin: '0 0 4px 0', color: '#1E3A8A', fontSize: '20px', fontWeight: 900 }}>
+                    {viewingPrescription.hospital_name || hospital.name}
+                  </h2>
+                  <p style={{ margin: 0, color: '#64748B', fontSize: '12px', fontWeight: 600 }}>
+                    {viewingPrescription.hospital_address || 'Outpatient Consultation Department (OPD)'}
+                  </p>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <span style={{ background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 800 }}>
+                    OPD PRESCRIPTION
+                  </span>
+                  <div style={{ fontSize: '11px', color: '#64748B', marginTop: '6px', fontWeight: 600 }}>
+                    Date: <strong>{viewingPrescription.appointment_date || new Date().toLocaleDateString()}</strong>
+                  </div>
+                </div>
               </div>
 
-              {viewingPrescription.follow_up_date && (
-                 <div style={{ padding: '12px 16px', background: '#eff6ff', borderRadius: '8px', border: '1px solid #bfdbfe' }}>
-                    <p style={{ margin: 0, color: '#1e3a8a', fontWeight: 600, fontSize: '14px' }}>Next Follow-up: {viewingPrescription.follow_up_date}</p>
-                 </div>
+              {/* Doctor & Patient Info Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: '#F8FAFC', borderRadius: '12px', padding: '12px 16px', marginBottom: '16px', border: '1px solid #E2E8F0' }}>
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Attending Physician</div>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A' }}>{viewingPrescription.doctor_name || 'Doctor'}</div>
+                  <div style={{ fontSize: '12px', color: '#2563EB', fontWeight: 600 }}>{viewingPrescription.doctor_specialty || 'General Physician'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Patient Details</div>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A' }}>{viewingPrescription.patient_name || patient?.name || 'Patient'}</div>
+                  <div style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>Phone: {patient?.phone || 'N/A'}</div>
+                </div>
+              </div>
+
+              {/* Clinical Notes */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: '#0F172A', textTransform: 'uppercase', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🩺</span> Clinical Observations & Diagnosis
+                </div>
+                <div style={{ padding: '12px 14px', background: '#F8FAFC', borderRadius: '10px', border: '1px solid #E2E8F0', fontSize: '13px', color: '#334155', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {viewingPrescription.clinical_notes || 'No specific clinical observations recorded.'}
+                </div>
+              </div>
+
+              {/* Rx Medicines */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: '#0F172A', textTransform: 'uppercase', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '16px', fontWeight: 900, color: '#2563EB' }}>℞</span> Prescribed Medicines & Dosage
+                </div>
+                <div style={{ padding: '12px 14px', background: '#F0FDF4', borderRadius: '10px', border: '1.5px solid #BBF7D0', fontSize: '13px', color: '#166534', fontFamily: 'monospace', fontWeight: 700, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                  {viewingPrescription.prescription || 'No medicines prescribed.'}
+                </div>
+              </div>
+
+              {/* Follow-up & Doctor Digital Signature */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderTop: '1px solid #E2E8F0', paddingTop: '12px', marginTop: '16px' }}>
+                <div>
+                  {viewingPrescription.follow_up_date && (
+                    <div style={{ background: '#EFF6FF', color: '#1E40AF', padding: '6px 12px', borderRadius: '8px', border: '1px solid #BFDBFE', fontSize: '12px', fontWeight: 700 }}>
+                      📅 Next Follow-Up Date: <strong>{viewingPrescription.follow_up_date}</strong>
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '11px', color: '#16A34A', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
+                    <CheckCircle size={13} /> Digitally Signed & Authorized
+                  </div>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
+                    {viewingPrescription.doctor_name}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+
+      {/* ── 2. DEDICATED PATIENT RESCHEDULE MODAL (48H / NEXT 2 DAYS STRICT) ── */}
+      {rescheduleModalAppt && (
+        <div className="p-modal-overlay">
+          <div className="p-modal" style={{ maxWidth: '520px', width: '92%', padding: '24px' }}>
+            
+            {/* Header */}
+            <div className="p-modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '20px' }}>🔄</span>
+                <h3 style={{ margin: 0, color: '#0F172A', fontSize: '17px', fontWeight: 800 }}>Reschedule Appointment</h3>
+              </div>
+              <button onClick={() => setRescheduleModalAppt(null)} className="p-btn-close">&times;</button>
+            </div>
+
+            <div className="p-modal-body" style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              
+              {/* Reschedule Working Days Policy Notice */}
+              <div style={{ background: '#FEF3C7', border: '1.5px solid #FDE68A', borderRadius: '12px', padding: '12px 14px', fontSize: '12px', color: '#92400E', lineHeight: 1.5 }}>
+                <strong>⚠️ Free 1-Time Reschedule Policy:</strong>
+                <div style={{ marginTop: '4px' }}>
+                  Rescheduling is allowed strictly for the doctor's <strong>next active working days</strong> (skipping off-days, leaves & holidays).
+                  If not rescheduled within this window, this visit will remain permanently marked as <strong>MISSED</strong> without refund.
+                </div>
+              </div>
+
+              {/* Doctor and Patient Summary */}
+              <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', color: '#334155' }}>
+                <div><strong>Doctor:</strong> {rescheduleModalAppt.doctor_name}</div>
+                <div><strong>Patient:</strong> {rescheduleModalAppt.patient_name || patient?.name}</div>
+                <div style={{ gridColumn: 'span 2' }}><strong>Reason:</strong> {rescheduleModalAppt.reason || 'General Consultation'}</div>
+              </div>
+
+              {/* Next Doctor Working Days Selector */}
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                  📅 Doctor's Next Active Working Days:
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(rescheduleWorkingDays.length, 1)}, 1fr)`, gap: '8px' }}>
+                  {rescheduleWorkingDays.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: '#64748B' }}>Loading working days...</div>
+                  ) : (
+                    rescheduleWorkingDays.map(d => {
+                      const isSelected = rescheduleDate === d.date;
+                      return (
+                        <button
+                          key={d.date}
+                          type="button"
+                          onClick={() => {
+                            setRescheduleDate(d.date);
+                            if (rescheduleModalAppt.doctor_id) {
+                              fetchRescheduleSlots(rescheduleModalAppt.doctor_id, d.date);
+                            }
+                          }}
+                          style={{
+                            padding: '10px 8px',
+                            borderRadius: '10px',
+                            border: `2px solid ${isSelected ? '#2563EB' : '#E2E8F0'}`,
+                            background: isSelected ? '#EFF6FF' : '#FFFFFF',
+                            color: isSelected ? '#1D4ED8' : '#334155',
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            textAlign: 'center',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          <div style={{ fontSize: '11px', color: isSelected ? '#2563EB' : '#64748B' }}>{d.display_label}</div>
+                          <div style={{ fontSize: '13px', marginTop: '2px' }}>{d.display_date}</div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Slot Picker */}
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+                  ⏰ Select Available Time Slot:
+                </label>
+                {rescheduleSlots.length === 0 ? (
+                  <div style={{ padding: '16px', background: '#F8FAFC', border: '1px dashed #CBD5E1', borderRadius: '10px', textAlign: 'center', fontSize: '12px', color: '#64748B' }}>
+                    No slots available on this date. Please choose another working day.
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', maxHeight: '160px', overflowY: 'auto', padding: '4px' }}>
+                    {rescheduleSlots.map(slot => {
+                      const slotVal = typeof slot === 'object' ? slot.value : slot;
+                      const slotLabel = typeof slot === 'object' ? slot.time : slot;
+                      const isBooked = typeof slot === 'object' ? slot.is_booked : false;
+                      const isSelected = rescheduleSlot === slotVal;
+                      return (
+                        <button
+                          key={slotVal}
+                          type="button"
+                          disabled={isBooked}
+                          onClick={() => setRescheduleSlot(slotVal)}
+                          style={{
+                            padding: '8px 4px',
+                            borderRadius: '8px',
+                            border: `1.5px solid ${isBooked ? '#FCA5A5' : (isSelected ? '#2563EB' : '#CBD5E1')}`,
+                            background: isBooked ? '#FEE2E2' : (isSelected ? '#2563EB' : '#FFFFFF'),
+                            color: isBooked ? '#DC2626' : (isSelected ? '#FFFFFF' : '#0F172A'),
+                            textDecoration: isBooked ? 'line-through' : 'none',
+                            fontWeight: 700,
+                            fontSize: '12px',
+                            cursor: isBooked ? 'not-allowed' : 'pointer',
+                            transition: 'all 0.15s'
+                          }}
+                        >
+                          {slotLabel}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Error Message */}
+              {rescheduleError && (
+                <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', color: '#B91C1C', padding: '10px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 600 }}>
+                  ⚠️ {rescheduleError}
+                </div>
               )}
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px', borderTop: '1px solid #E2E8F0', paddingTop: '14px' }}>
+                <button
+                  type="button"
+                  onClick={() => setRescheduleModalAppt(null)}
+                  style={{ padding: '8px 16px', borderRadius: '10px', background: '#F1F5F9', border: 'none', color: '#475569', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rescheduleLoading || !rescheduleSlot}
+                  onClick={handleConfirmReschedule}
+                  style={{
+                    padding: '8px 20px', borderRadius: '10px',
+                    background: rescheduleLoading || !rescheduleSlot ? '#94A3B8' : 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+                    border: 'none', color: '#FFFFFF', fontWeight: 800, fontSize: '13px',
+                    cursor: rescheduleLoading || !rescheduleSlot ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 2px 8px rgba(37,99,235,0.25)'
+                  }}
+                >
+                  {rescheduleLoading ? 'Rescheduling...' : 'Confirm Reschedule'}
+                </button>
+              </div>
+
             </div>
           </div>
         </div>

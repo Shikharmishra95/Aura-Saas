@@ -9,12 +9,12 @@ async_engine = create_async_engine(
     settings.ASYNC_DATABASE_URL,
     echo=False,  # Set to True for verbose SQLAlchemy queries logging in debugging
     pool_pre_ping=True,
-    pool_recycle=120,         # Recycle connections every 2 minutes (Railway cloud DB)
-    pool_size=10,             # Reduced pool size — Railway has connection limits
-    max_overflow=20,          # Allow burst connections
-    pool_timeout=30,          # Wait up to 30s for a pool slot before error
+    pool_recycle=180,         # Recycle connections periodically
+    pool_size=getattr(settings, 'DB_POOL_SIZE', 15),         # Bounded to cloud DB limits (Railway/RDS)
+    max_overflow=getattr(settings, 'DB_MAX_OVERFLOW', 20),   # Controlled burst up to 35 total
+    pool_timeout=20,          # Wait up to 20s for a pool slot before error
     connect_args={
-        "connect_timeout": 30  # Max 30s to establish initial TCP connection
+        "connect_timeout": 20  # Max 20s to establish initial TCP connection
     }
 )
 

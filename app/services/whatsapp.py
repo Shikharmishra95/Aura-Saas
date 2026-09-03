@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.logging import logger
 
 # Thread pool for running synchronous Twilio calls without blocking async event loop
-_whatsapp_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whatsapp")
+_whatsapp_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="whatsapp")
 
 
 class WhatsAppNotificationService:

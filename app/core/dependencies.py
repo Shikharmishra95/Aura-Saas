@@ -67,24 +67,6 @@ async def get_current_user(
         logger.error(f"JWT Decode error: {str(e)}")
         raise credentials_exception
 
-    # 1. Allow hardcoded CP Tiwari and Owner credentials to bypass database lookup
-    if username in ["admin_cp", "doctor_cp", "receptionist_cp"]:
-        return User(
-            id=username,
-            username=username,
-            email=f"{username}@cptiwari.com",
-            hospital_id="hosp_default",
-            is_active=True
-        )
-    elif username == "shiva9532":
-        return User(
-            id="shiva9532",
-            username="shiva9532",
-            email="shiva9532@gmail.com",
-            hospital_id="super_admin",
-            is_active=True
-        )
-
     stmt = select(User).where(User.username == username, User.is_active == True)
     user = (await db.execute(stmt)).scalar_one_or_none()
     if user is None:

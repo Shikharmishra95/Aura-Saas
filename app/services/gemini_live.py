@@ -55,7 +55,7 @@ class GeminiLiveClient:
                                 "parameters": {
                                     "type": "OBJECT",
                                     "properties": {
-                                        "doctor_id": {"type": "STRING", "description": "Doctor ID (doc_ortho, doc_cardio, doc_eye)"},
+                                        "doctor_id": {"type": "STRING", "description": "Doctor ID or doctor name identifier as provided in the prompt context"},
                                         "target_date": {"type": "STRING", "description": "ISO date YYYY-MM-DD"}
                                     },
                                     "required": ["doctor_id", "target_date"]
@@ -68,7 +68,7 @@ class GeminiLiveClient:
                                     "type": "OBJECT",
                                     "properties": {
                                         "patient_name": {"type": "STRING", "description": "Full name of patient"},
-                                        "doctor_id": {"type": "STRING", "description": "Doctor ID (doc_ortho, doc_cardio, doc_eye)"},
+                                        "doctor_id": {"type": "STRING", "description": "Doctor ID or doctor identifier as provided in the prompt context"},
                                         "appointment_datetime": {"type": "STRING", "description": "ISO Datetime YYYY-MM-DDTHH:MM:SS"},
                                         "reason": {"type": "STRING", "description": "Medical issue or reason for visit"}
                                     },

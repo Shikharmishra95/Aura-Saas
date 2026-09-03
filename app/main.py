@@ -35,16 +35,12 @@ def create_app() -> FastAPI:
     # 2. Register custom application exceptions mapping handlers
     register_exception_handlers(app)
 
-    # 3. Include API v1 Router prefix
+    # 3. Import and include API routers with /api/v1 prefix and root fallback
+    from app.api.v1.router import api_router
+    
     app.include_router(api_router, prefix=settings.API_V1_STR)
+    app.include_router(api_router)
 
-    # Include appointments router at root level so dashboard works at /receptionist/schedule directly
-    from app.api.v1.endpoints import appointments
-    app.include_router(appointments.router)
-
-    # WhatsApp webhook — patient intake conversation replies
-    from app.api.v1.endpoints import whatsapp_webhook
-    app.include_router(whatsapp_webhook.router)
 
     # 4. Root Health Check Endpoint
     @app.get("/health", tags=["system"])

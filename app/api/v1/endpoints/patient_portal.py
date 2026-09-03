@@ -41,6 +41,7 @@ async def get_hospital_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
 
     stmt = select(Hospital).where(
         or_(
+            Hospital.id == clean_slug,
             Hospital.slug == slug,
             Hospital.slug == clean_slug,
             Hospital.slug == hyphen_slug,
@@ -176,6 +177,72 @@ async def get_doctor_slots(doctor_id: str, date_param: date = Query(..., alias="
     return {"date": date_param, "slots": slots}
 
 
+@router.get("/doctors/{doctor_id}/next-working-days")
+async def get_doctor_next_working_days(
+    doctor_id: str,
+    count: int = Query(3, ge=1, le=7),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns the doctor's next N active working days, skipping off-days, leaves, and hospital holidays.
+    """
+    from datetime import datetime as dt, timedelta
+    from app.database.models.appointment import DoctorSchedule, DoctorLeave, HospitalHoliday, Doctor
+
+    start_date = dt.now().date()
+
+    # 1. Fetch Doctor
+    doc_stmt = select(Doctor).where(Doctor.id == doctor_id)
+    doctor = (await db.execute(doc_stmt)).scalar_one_or_none()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    # 2. Fetch all weekly schedules for this doctor
+    sched_stmt = select(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor_id)
+    schedules = (await db.execute(sched_stmt)).scalars().all()
+    working_dow_set = {s.day_of_week for s in schedules if s.slot_duration_minutes and s.slot_duration_minutes > 0}
+
+    # 3. Fetch doctor leaves (APPROVED or PENDING)
+    leave_stmt = select(DoctorLeave).where(
+        DoctorLeave.doctor_id == doctor_id,
+        DoctorLeave.end_date >= start_date,
+        DoctorLeave.status.in_(["APPROVED", "PENDING"])
+    )
+    doctor_leaves = (await db.execute(leave_stmt)).scalars().all()
+
+    # 4. Fetch hospital holidays
+    holiday_stmt = select(HospitalHoliday.holiday_date).where(
+        HospitalHoliday.hospital_id == doctor.hospital_id,
+        HospitalHoliday.holiday_date >= start_date
+    )
+    holiday_dates = set((await db.execute(holiday_stmt)).scalars().all())
+
+    working_days = []
+    curr = start_date
+    max_lookahead = 21 # Search up to 3 weeks ahead for active working days
+
+    for _ in range(max_lookahead):
+        dow = curr.isoweekday()
+        is_on_leave = any(l.start_date <= curr <= l.end_date for l in doctor_leaves)
+        is_holiday = curr in holiday_dates
+
+        if dow in working_dow_set and not is_on_leave and not is_holiday:
+            label = "Today" if curr == start_date else ("Tomorrow" if curr == start_date + timedelta(days=1) else curr.strftime("%a"))
+            working_days.append({
+                "date": curr.isoformat(),
+                "day_name": curr.strftime("%A"),
+                "display_label": label,
+                "display_date": curr.strftime("%b %d"),
+                "is_today": curr == start_date
+            })
+            if len(working_days) >= count:
+                break
+        curr += timedelta(days=1)
+
+    return {"doctor_id": doctor_id, "working_days": working_days}
+
+
+
 
 class BookAppointmentRequest(BaseModel):
     hospital_id: str
@@ -183,6 +250,8 @@ class BookAppointmentRequest(BaseModel):
     appointment_datetime: datetime
     reason: Optional[str] = None
     patient_id: Optional[str] = None
+    patient_name: Optional[str] = None
+    patient_age: Optional[int] = None
     payment_mode: Optional[str] = "ONLINE"  # "ONLINE" or "COUNTER"
 
 @router.post("/appointments")
@@ -191,34 +260,76 @@ async def book_appointment(request: BookAppointmentRequest, current_patient=Depe
     from app.core.logging import logger
     
     phone = current_patient.get("sub") if isinstance(current_patient, dict) else getattr(current_patient, "phone", None)
-    
-    # Resolve target patient_id
-    if request.patient_id:
+    logged_in_patient_id = current_patient.get("user_id") if isinstance(current_patient, dict) else getattr(current_patient, "id", None)
+
+    # Fetch logged in account holder (booker)
+    booker = None
+    if logged_in_patient_id:
+        booker_stmt = select(Patient).where(Patient.id == logged_in_patient_id)
+        booker = (await db.execute(booker_stmt)).scalars().first()
+    elif phone:
+        booker_stmt = select(Patient).where(Patient.phone == phone).order_by(Patient.created_at.asc())
+        booker = (await db.execute(booker_stmt)).scalars().first()
+        if booker:
+            logged_in_patient_id = booker.id
+
+    booker_name = f"{booker.first_name} {booker.last_name}".strip() if booker else "Account Holder"
+
+    # Resolve target patient_id (Handle booking for self vs family member)
+    target_patient_id = None
+    is_self_booking = True
+
+    if request.patient_name and request.patient_name.strip() and booker and request.patient_name.strip().lower() != booker_name.lower():
+        # Booking for someone else (family member)
+        is_self_booking = False
+        p_name = request.patient_name.strip()
+        name_parts = p_name.split(" ", 1)
+        f_name = name_parts[0]
+        l_name = name_parts[1] if len(name_parts) > 1 else ""
+
+        # Check if family patient record already exists for this phone number
+        p_stmt = select(Patient).where(
+            Patient.hospital_id == request.hospital_id,
+            Patient.phone == phone,
+            Patient.first_name.ilike(f_name)
+        )
+        existing_family_p = (await db.execute(p_stmt)).scalars().first()
+        if existing_family_p:
+            target_patient_id = existing_family_p.id
+        else:
+            # Create new family member Patient record linked to hospital & phone
+            from datetime import date as date_type
+            new_p = Patient(
+                id=str(uuid.uuid4()),
+                hospital_id=request.hospital_id,
+                first_name=f_name,
+                last_name=l_name,
+                phone=phone,
+                date_of_birth=date_type(1990, 1, 1),
+                is_active=True
+            )
+            db.add(new_p)
+            await db.flush()
+            target_patient_id = new_p.id
+    elif request.patient_id:
         p_stmt = select(Patient).where(Patient.id == request.patient_id, Patient.phone == phone)
         target_p = (await db.execute(p_stmt)).scalars().first()
-        target_patient_id = target_p.id if target_p else (current_patient.get("user_id") if isinstance(current_patient, dict) else current_patient.id)
+        target_patient_id = target_p.id if target_p else logged_in_patient_id
+        is_self_booking = (target_patient_id == logged_in_patient_id)
     else:
-        target_patient_id = current_patient.get("user_id") if isinstance(current_patient, dict) else current_patient.id
-        
-    # Fallback for old JWT tokens that don't have user_id
+        target_patient_id = logged_in_patient_id
+        is_self_booking = True
+
     if not target_patient_id and phone:
         p_stmt = select(Patient).where(Patient.phone == phone).order_by(Patient.created_at.asc())
         target_p = (await db.execute(p_stmt)).scalars().first()
         if target_p:
             target_patient_id = target_p.id
-            
+
     if not target_patient_id:
         raise HTTPException(status_code=400, detail="Could not identify patient. Please log out and log in again.")
-        
+
     payment_mode = (request.payment_mode or "ONLINE").upper()
-    
-    # Resolve the logged-in account holder's name (booked_by)
-    logged_in_patient_id = current_patient.get("user_id") if isinstance(current_patient, dict) else current_patient.id
-    booker_stmt = select(Patient).where(Patient.id == logged_in_patient_id)
-    booker = (await db.execute(booker_stmt)).scalars().first()
-    booker_name = f"{booker.first_name} {booker.last_name}".strip() if booker else None
-    # Only set booked_by_name if booking for SOMEONE ELSE (family member)
-    is_self_booking = (target_patient_id == logged_in_patient_id)
     
     # Idempotency check: if active appointment already exists with same patient, doctor, and time, return it immediately.
     existing_stmt = select(Appointment).where(
@@ -257,7 +368,8 @@ async def book_appointment(request: BookAppointmentRequest, current_patient=Depe
             consultation_status="SCHEDULED",
             reason=request.reason,
             source="PATIENT_PORTAL",
-            booked_by_name=None if is_self_booking else booker_name
+            booked_by_name=None if is_self_booking else booker_name,
+            patient_name_override=request.patient_name
         )
         db.add(appt)
         await db.flush()
@@ -355,11 +467,15 @@ async def get_patient_appointments(
     results = []
     for a in appts:
         can_reschedule = False
-        if a.status in ["SCHEDULED", "CONFIRMED", "PENDING_PAYMENT"]:
-            can_reschedule = True
-        elif a.status == "MISSED" and a.payment_status == "PAID":
-            if now <= a.appointment_datetime + timedelta(hours=48):
+        reschedule_count = getattr(a, "reschedule_count", 0) or 0
+        is_paid = a.payment_status in ["PAID", "COMPLETED"]
+        
+        if is_paid and reschedule_count < 1:
+            if a.status in ["SCHEDULED", "CONFIRMED", "RESCHEDULED"]:
                 can_reschedule = True
+            elif a.status == "MISSED":
+                if now <= a.appointment_datetime + timedelta(hours=48):
+                    can_reschedule = True
 
         patient_name = f"{a.patient.first_name} {a.patient.last_name}".strip() if a.patient else "Patient"
 
@@ -373,6 +489,8 @@ async def get_patient_appointments(
             "patient_id": a.patient_id,
             "patient_name": patient_name,
             "doctor_name": f"Dr. {a.doctor.first_name} {a.doctor.last_name}" if a.doctor else "Unknown",
+            "doctor_id": a.doctor_id,
+            "reschedule_count": reschedule_count,
             "can_reschedule": can_reschedule
         })
     return results
@@ -393,14 +511,121 @@ async def get_prescription(appointment_id: str, current_patient=Depends(get_curr
     note_stmt = select(ConsultationNote).where(ConsultationNote.appointment_id == appointment_id)
     note = (await db.execute(note_stmt)).scalars().first()
     
+    pat_stmt = select(Patient).where(Patient.id == appt.patient_id)
+    patient = (await db.execute(pat_stmt)).scalar_one_or_none()
+    doc_stmt = select(Doctor).where(Doctor.id == appt.doctor_id)
+    doctor = (await db.execute(doc_stmt)).scalar_one_or_none()
+    hosp_stmt = select(Hospital).where(Hospital.id == appt.hospital_id)
+    hospital = (await db.execute(hosp_stmt)).scalar_one_or_none()
+
     if not note:
-        return {"has_prescription": False}
+        return {
+            "has_prescription": False,
+            "patient_name": f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient",
+            "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor",
+            "doctor_specialty": getattr(doctor, "specialization", "General") if doctor else "General",
+            "hospital_name": hospital.name if hospital else "Hospital",
+            "hospital_address": getattr(hospital, "address", "") if hospital else "",
+            "appointment_date": appt.appointment_datetime.strftime("%d %B %Y") if appt.appointment_datetime else "N/A"
+        }
         
     return {
         "has_prescription": True,
         "clinical_notes": note.clinical_notes,
         "prescription": note.prescription,
-        "follow_up_date": note.follow_up_date
+        "follow_up_date": str(note.follow_up_date) if note.follow_up_date else None,
+        "patient_name": f"{patient.first_name} {patient.last_name}".strip() if patient else "Patient",
+        "doctor_name": f"Dr. {doctor.first_name} {doctor.last_name}".strip() if doctor else "Doctor",
+        "doctor_specialty": getattr(doctor, "specialization", "General") if doctor else "General",
+        "hospital_name": hospital.name if hospital else "Hospital",
+        "hospital_address": getattr(hospital, "address", "") if hospital else "",
+        "appointment_date": appt.appointment_datetime.strftime("%d %B %Y") if appt.appointment_datetime else "N/A"
+    }
+
+
+class PatientRescheduleRequest(BaseModel):
+    new_datetime: str
+
+
+@router.post("/appointments/{appointment_id}/reschedule")
+async def patient_reschedule_appointment(
+    appointment_id: str,
+    request: PatientRescheduleRequest,
+    current_patient=Depends(get_current_patient),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Patient self-service 1-time reschedule within 48h and next 2 days only.
+    """
+    phone = current_patient.get("sub") if isinstance(current_patient, dict) else getattr(current_patient, "phone", None)
+    p_stmt = select(Patient.id).where(Patient.phone == phone)
+    all_patient_ids = (await db.execute(p_stmt)).scalars().all()
+
+    stmt = select(Appointment).where(Appointment.id == appointment_id, Appointment.patient_id.in_(all_patient_ids))
+    appt = (await db.execute(stmt)).scalars().first()
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+
+    if appt.payment_status not in ["PAID", "COMPLETED", "SUCCESS", "PAID_RECEPTION", "captured"]:
+        raise HTTPException(status_code=400, detail="Rescheduling is allowed only for paid appointments.")
+
+    if (appt.reschedule_count or 0) >= 1:
+        raise HTTPException(status_code=400, detail="This appointment has already reached the maximum limit of 1 reschedule.")
+
+    now = datetime.now()
+    if appt.status == "MISSED" or appt.appointment_datetime < now:
+        if now > appt.appointment_datetime + timedelta(hours=48):
+            raise HTTPException(status_code=400, detail="Reschedule window expired. Rescheduling is strictly allowed only within 48 hours of missed appointment.")
+
+    try:
+        target_dt = datetime.fromisoformat(request.new_datetime)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO format.")
+
+    max_allowed_date = now.date() + timedelta(days=2)
+    if target_dt.date() < now.date() or target_dt.date() > max_allowed_date:
+        raise HTTPException(status_code=400, detail="Rescheduling is strictly restricted to dates within the next 2 days.")
+
+    appt.appointment_datetime = target_dt
+    appt.status = "RESCHEDULED"
+    appt.reschedule_count = (appt.reschedule_count or 0) + 1
+    appt.updated_at = now
+
+    await db.commit()
+    await db.refresh(appt)
+
+    # WhatsApp notification
+    try:
+        from app.services.whatsapp import WhatsAppNotificationService
+        import asyncio
+        wa_service = WhatsAppNotificationService()
+        pat_stmt = select(Patient).where(Patient.id == appt.patient_id)
+        patient = (await db.execute(pat_stmt)).scalar_one_or_none()
+        doc_stmt = select(Doctor).where(Doctor.id == appt.doctor_id)
+        doctor = (await db.execute(doc_stmt)).scalar_one_or_none()
+        hosp_stmt = select(Hospital).where(Hospital.id == appt.hospital_id)
+        hospital = (await db.execute(hosp_stmt)).scalar_one_or_none()
+
+        if patient and doctor and hospital:
+            wa_details = {
+                "hospital_id": hospital.id,
+                "hospital_name": hospital.name,
+                "appointment_id": appt.id,
+                "patient_name": f"{patient.first_name} {patient.last_name}".strip(),
+                "patient_phone": patient.phone,
+                "doctor_name": f"{doctor.first_name} {doctor.last_name}".strip(),
+                "appointment_datetime": appt.appointment_datetime.isoformat(),
+                "reason": appt.reason or ""
+            }
+            asyncio.create_task(wa_service.send_appointment_confirmation(wa_details))
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "message": "Appointment successfully rescheduled.",
+        "appointment_id": appt.id,
+        "new_datetime": appt.appointment_datetime.isoformat()
     }
 
 class ConfirmPaymentRequest(BaseModel):
@@ -422,6 +647,8 @@ async def confirm_payment(appointment_id: str, request: ConfirmPaymentRequest, c
         
     if request.payment_mode == "ONLINE":
         appt.payment_status = "PAID"
+        if appt.status == "PENDING_PAYMENT":
+            appt.status = "SCHEDULED"
     
     db.add(appt)
     await db.commit()

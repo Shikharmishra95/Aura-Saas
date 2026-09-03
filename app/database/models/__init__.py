@@ -25,6 +25,14 @@ from app.database.models.conversation import (
     FAQ
 )
 from app.database.models.call_log import User, Role, UserRole, Notification, NotificationLog, AuditLog
+from app.database.models.control_tower import (
+    HospitalSubscriptionHistory,
+    TenantErrorLog,
+    PlatformAuditLog,
+    PlatformIncident,
+    PlatformAlert,
+    SubscriptionPlanConfig
+)
 
 __all__ = [
     "Hospital",
@@ -48,5 +56,14 @@ __all__ = [
     "FAQ",
     "User",
     "Role",
-    "UserRole"
+    "UserRole",
+    "Notification",
+    "NotificationLog",
+    "AuditLog",
+    "HospitalSubscriptionHistory",
+    "TenantErrorLog",
+    "PlatformAuditLog",
+    "PlatformIncident",
+    "PlatformAlert"
 ]
+

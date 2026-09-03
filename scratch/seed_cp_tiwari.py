@@ -1,7 +1,11 @@
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import asyncio
 from datetime import date, time, datetime, timedelta
 from sqlalchemy import select
-from app.database.session import async_session_factory
+from app.database.session import async_session_factory, async_engine
 from app.database.base import Base
 from app.database.models.appointment import Hospital, Department, Doctor, DoctorSchedule, WorkingHour
 from app.database.models.conversation import FAQ, DoctorAvailabilityCache
@@ -10,6 +14,11 @@ from app.core.config import settings
 async def seed_cp_tiwari():
     print("Starting CP Tiwari Hospital database seeding...")
     
+    # 0. Ensure all tables are created in local database
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("Database tables verified/created in local MySQL schema.")
+
     # We resolve the hospital phone number dynamically from Twilio phone number config
     twilio_number = settings.TWILIO_PHONE_NUMBER or "+919532399202"
     

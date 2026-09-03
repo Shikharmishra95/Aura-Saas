@@ -138,6 +138,21 @@ class AppointmentEngine:
                     "nearest_slot": nearest_slot_str
                 }
 
+            # 6b. Direct Atomic Conflict Check to prevent double-booking race conditions
+            conflict_stmt = select(Appointment).where(
+                Appointment.doctor_id == doctor_id,
+                Appointment.appointment_datetime == appointment_datetime,
+                Appointment.status.in_(["SCHEDULED", "CONFIRMED", "PENDING_PAYMENT", "RESCHEDULED", "IN_CONSULTATION"])
+            )
+            conflict_appt = (await self.db.execute(conflict_stmt)).scalars().first()
+            if conflict_appt:
+                engine_logger.info(f"Race condition prevented: Slot {appointment_datetime} already taken for doctor {doctor_id}")
+                return {
+                    "code": "SLOT_FULL",
+                    "message": f"The slot at {appointment_datetime.strftime('%I:%M %p')} was just reserved by another patient.",
+                    "nearest_slot": nearest_slot_str if 'nearest_slot_str' in locals() else "कृपया अन्य स्लॉट चुनें"
+                }
+
             # 7. Create Appointment Record
             appointment_id = str(uuid.uuid4())
             appointment = Appointment(
