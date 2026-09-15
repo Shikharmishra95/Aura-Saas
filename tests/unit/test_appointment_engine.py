@@ -6,7 +6,7 @@ from app.database.models.appointment import Appointment, AppointmentStatusHistor
 def get_future_date(days_ahead=1):
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     target = ist_now.date() + timedelta(days=days_ahead)
-    while target.isoweekday() > 5:
+    while target.isoweekday() > 6:
         target += timedelta(days=1)
     return target
 

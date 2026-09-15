@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str
     GEMINI_MODEL: str = "gemini-1.5-flash-latest"
 
+    # Groq High-Speed LLM API Configurations
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "qwen/qwen3.8-27b"
+
     # Twilio Voice Service Configurations
     TWILIO_ACCOUNT_SID: str
     TWILIO_AUTH_TOKEN: str

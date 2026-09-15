@@ -1,0 +1,33 @@
+{
+  "id": "chatcmpl-02c3e267-aaf8-45fe-aa95-4d807acc598f",
+  "object": "chat.completion",
+  "created": 1789124879,
+  "model": "qwen/qwen3.8-27b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The doctor who is free today with 0 appointments is **Dr. Vivek Mishra**."
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "queue_time": 0.238237526,
+    "prompt_tokens": 172,
+    "prompt_time": 0.014598212,
+    "completion_tokens": 20,
+    "completion_time": 0.0456745,
+    "total_tokens": 192,
+    "total_time": 0.060272712
+  },
+  "usage_breakdown": null,
+  "system_fingerprint": "fp_61e8d148b4",
+  "x_groq": {
+    "id": "req_01m282e930ehxbtr6nbc0z6y5q",
+    "seed": 1588666684
+  },
+  "service_tier": "on_demand"
+}

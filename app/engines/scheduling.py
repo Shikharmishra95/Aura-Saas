@@ -21,6 +21,12 @@ class SchedulingEngine:
             engine_logger.warning(f"Doctor {doctor_id} not found or inactive.")
             return []
         
+        if isinstance(search_date, str):
+            try:
+                search_date = datetime.strptime(search_date.split('T')[0], "%Y-%m-%d").date()
+            except Exception:
+                search_date = datetime.now().date()
+
         # 1.5 Enforce blocking past dates (allow today's remaining future slots and onwards in IST)
         from datetime import timezone, timedelta as td_type
         ist_now = datetime.now(timezone.utc) + td_type(hours=5, minutes=30)

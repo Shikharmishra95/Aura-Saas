@@ -12,6 +12,7 @@ from app.api.v1.endpoints import (
     voice,
     patient_auth,
     patient_portal,
+    copilot,
 )
 from app.api.v1.endpoints.owner import owner_router
 
@@ -53,3 +54,6 @@ api_router.include_router(patient_portal.router, prefix="/patient", tags=["patie
 
 # 12. Super Admin Control Tower
 api_router.include_router(owner_router, prefix="/owner", tags=["owner_control_tower"])
+
+# 13. Context-Aware AI Copilot Chatbot
+api_router.include_router(copilot.router, tags=["copilot"])

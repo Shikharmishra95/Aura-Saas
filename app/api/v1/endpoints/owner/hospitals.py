@@ -193,9 +193,9 @@ async def get_hospital_360_deep_audit(
                 {
                     "id": c.id,
                     "caller_number": c.caller_number,
-                    "call_duration": c.call_duration or 0,
-                    "intent": c.intent or "General Inquiry",
-                    "status": c.status or "COMPLETED",
+                    "call_duration": getattr(c, 'duration_seconds', 0) or 0,
+                    "intent": "Voice OPD Booking",
+                    "status": getattr(c, 'call_status', 'COMPLETED') or "COMPLETED",
                     "created_at": c.created_at.isoformat() if c.created_at else None
                 }
                 for c in calls

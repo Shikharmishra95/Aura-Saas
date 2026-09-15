@@ -4,6 +4,7 @@ import Header from './components/common/Header';
 import Sidebar from './components/common/Sidebar';
 import PatientProfileModal from './components/common/Modals/PatientProfileModal';
 import ProfileModal from './components/common/ProfileModal';
+import CopilotWidget from './components/copilot/CopilotWidget';
 import ControlTower from './components/superadmin/ControlTower';
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
@@ -5603,6 +5604,17 @@ function App() {
         username={username}
         userRole={userRole}
         activeHospital={activeHospital}
+        t={t}
+      />
+
+      {/* Floating Context-Aware AI Copilot */}
+      <CopilotWidget 
+        token={token}
+        userRole={userRole}
+        username={username}
+        activeHospital={activeHospital}
+        activeTab={activeTab}
+        selectedDate={selectedScheduleDate}
         t={t}
       />
 

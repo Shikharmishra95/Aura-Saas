@@ -1,0 +1,38 @@
+[
+  {
+    "query": "which doctor is free today who have 0 appointment",
+    "route": "LIVE_DATA",
+    "tool_used": null,
+    "reply": "Based on the live hospital metrics for today (**2026-09-11, Friday**), here are the doctors who are **on-duty** and currently have **0 appointments**:\n\n| Doctor | Department | OPD Fee | Status Today |\n| :--- | :--- | :--- | :--- |\n| **Dr. Prinsh Agni** | Dermatology | ₹400 | ✅ Free (0 booked) |\n| **Dr. Shiva Mishra** | Orthopedics | ₹500 | ✅ Free (0 booked) |\n\n### ⚠️ Note on Other Doctors\n*   **Dr. Nitin Dewedi** (Cardiology) and **Dr. Vivek Mishra** (Cardiology) also have 0 appointments today, but they are **not on-duty** on Fridays according to their schedules.\n\nWould you like to check the live waiting queue for any of the available doctors or book an appointment?"
+  },
+  {
+    "query": "Show doctor-wise booking performance",
+    "route": "ACTION",
+    "tool_used": "run_analytics_query",
+    "reply": "Here is the **Doctor-Wise Booking Performance** report for the selected period:\n\n| Doctor Name | Department | Total Booked | Completed | Missed/Cancelled | Revenue (₹) |\n|:---|:---|:---:|:---:|:---:|:---:|\n| **Dr. prinsh agni** | Dermatology | 5 | 2 | 3 | 800 |\n| **Dr. shiva mishra** | Orthopedics | 3 | 0 | 1 | 0 |\n| **Dr. nitin dewedi** | Cardiology | 2 | 0 | 2 | 0 |\n| **Dr. vivek Mishra** | Cardiology | 0 | 0 | 0 | 0 |\n\n📊 **Key Insights:**\n- **Highest Volume:** Dr. prinsh agni leads with 5 total bookings and generated ₹800 in revenue.\n- **Completion Rate:** Only Dr. prinsh agni has completed consultations (2 out of 5). The other doctors currently show 0 completed visits in this period.\n- **Cancellation/Missed Rate:** Dr. nitin dewedi has a 100% missed/cancelled rate (2/2), while Dr. shiva mishra has 1 missed/cancelled out of 3 bookings.\n- **Dr. vivek Mishra** currently shows no booking activity in the selected timeframe.\n\nLet me know if you need a breakdown by specific date range, peak hours, or revenue trends!"
+  },
+  {
+    "query": "What is our total OPD revenue for this month?",
+    "route": "LIVE_DATA",
+    "tool_used": "get_revenue_and_dues",
+    "reply": "### 💰 Financial & OPD Revenue Summary (This Month)\n\n* **Total Appointments Booked:** 10\n* **Total Revenue Collected (Paid):** **₹1,900** (5 transactions)\n* **Pending Collection / Dues:** **₹2,200** (5 pending)"
+  },
+  {
+    "query": "MERE HOSPITAL ME KIS DCTOR KI FEES SABSE JYADA HAI",
+    "route": "LIVE_DATA",
+    "tool_used": "get_comprehensive_doctor_analytics",
+    "reply": "### 💰 Highest Consultation Fee Doctor\n\nAapke hospital me **Dr. shiva mishra** (Orthopedics) ki OPD consultation fees sabse jyada hai:\n\n* 🩺 **Doctor:** **Dr. shiva mishra**\n* 🏥 **Department:** Orthopedics\n* 💵 **OPD Fee:** **₹500 per consultation**\n* ⏰ **Working Days:** Monday, Tuesday, Wednesday, Thursday, Friday, Saturday (03:00 PM - 06:00 PM)\n\n#### 📊 Complete Doctor Fee Ranking (High to Low):\n| Doctor | Department | Consultation Fee | Working Days |\n|---|---|---|---|\n| **Dr. shiva mishra** | Orthopedics | ₹500 | 6 days/wk |\n| **Dr. prinsh agni** | Dermatology | ₹400 | 6 days/wk |\n| **Dr. vivek Mishra** | Cardiology | ₹400 | 5 days/wk |\n| **Dr. nitin dewedi** | Cardiology | ₹300 | 6 days/wk |"
+  },
+  {
+    "query": "What is our subscription validity?",
+    "route": "LIVE_DATA",
+    "tool_used": "get_hospital_subscription_info",
+    "reply": "### 🛡️ Hospital Subscription & SaaS License Status\n\n* **Hospital:** Rao Hospital \n* **Subscription Plan:** **ENTERPRISE**\n* **Plan Status:** `ACTIVE`\n* **Expiration Date:** **2027-11-15**\n* **Days Remaining:** **430 days**\n* **Active Doctors:** 4 / 999 quota\n* **AI Voice Copilot:** ✅ Enabled"
+  },
+  {
+    "query": "how many total doctors are active in my hospital?",
+    "route": "LIVE_DATA",
+    "tool_used": null,
+    "reply": "Based on the live hospital directory, there are **4 active doctors** at Rao Hospital:\n\n| # | Doctor | Department | OPD Fee |\n|---|--------|------------|---------|\n| 1 | Dr. Nitin Dewedi | Cardiology | ₹300 |\n| 2 | Dr. Vivek Mishra | Cardiology | ₹400 |\n| 3 | Dr. Prinsh Agni | Dermatology | ₹400 |\n| 4 | Dr. Shiva Mishra | Orthopedics | ₹500 |\n\n**Breakdown by Department:**\n- **Cardiology:** 2 doctors\n- **Dermatology:** 1 doctor\n- **Orthopedics:** 1 doctor\n\nWould you like more details on any specific doctor or department?"
+  }
+]
