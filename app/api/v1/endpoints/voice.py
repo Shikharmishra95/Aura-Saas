@@ -64,12 +64,17 @@ async def handle_inbound_call(
             )
             return Response(content=fallback_twiml, media_type="text/xml")
 
-        if not hospital.is_active:
-            twilio_logger.warning(f"Hospital {hospital.name} ({hospital.id}) is INACTIVE. Rejecting incoming voice call.")
-            inactive_twiml = twilio_service.generate_hangup_twiml(
-                "क्षमा करें, यह अस्पताल खाता वर्तमान में निष्क्रिय है। कृपया बाद में प्रयास करें।"
-            )
-            return Response(content=inactive_twiml, media_type="text/xml")
+        # Subscription & active status verification
+        now_dt = datetime.now()
+        is_plan_expired = bool(hospital.plan_expires_at and hospital.plan_expires_at < now_dt)
+        if not hospital.is_active or is_plan_expired or not hospital.ai_voice_enabled:
+            twilio_logger.warning(f"Hospital {hospital.name} ({hospital.id}) cannot receive voice calls (active={hospital.is_active}, expired={is_plan_expired}, voice_enabled={hospital.ai_voice_enabled}). Rejecting call.")
+            if is_plan_expired:
+                msg = f"नमस्कार। {hospital.name} की टेलीफोन बुकिंग सेवा वर्तमान में अस्थायी रूप से स्थगित है। कृपया अस्पताल फ्रंट डेस्क पर सीधे संपर्क करें।"
+            else:
+                msg = "क्षमा करें, यह अस्पताल खाता वर्तमान में निष्क्रिय है। कृपया बाद में प्रयास करें।"
+            suspension_twiml = twilio_service.generate_hangup_twiml(msg)
+            return Response(content=suspension_twiml, media_type="text/xml")
 
         hospital_id = hospital.id
 

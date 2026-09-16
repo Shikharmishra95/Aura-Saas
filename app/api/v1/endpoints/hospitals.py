@@ -416,6 +416,9 @@ async def get_hospital_profile(
             diff = (exp_dt.replace(tzinfo=None) - now_dt.replace(tzinfo=None)).total_seconds()
             days_left = max(0, int(diff / 86400))
             is_expired = diff <= 0
+            if is_expired and hosp.plan_status != "EXPIRED":
+                hosp.plan_status = "EXPIRED"
+                await db.commit()
 
     doc_count_stmt = select(func.count(Doctor.id)).where(Doctor.hospital_id == hosp_id, Doctor.is_active == True)
     active_docs_count = (await db.execute(doc_count_stmt)).scalar_one_or_none() or 0

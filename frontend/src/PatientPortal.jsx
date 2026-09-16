@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Clock, Calendar, CheckCircle, Phone, User, FileText, ChevronRight, Download } from 'lucide-react';
 import './PatientPortal.css'; // We'll create this or use App.css
+import CopilotWidget from './components/copilot/CopilotWidget';
 
 const API_BASE = '/api/v1/patient';
 
@@ -336,6 +337,7 @@ export default function PatientPortal({ slug, lang = 'en' }) {
   const logout = () => {
     localStorage.removeItem(`patient_token_${slug}`);
     localStorage.removeItem(`patient_data_${slug}`);
+    sessionStorage.clear();
     setToken('');
     setPatient(null);
     setStep('phone');
@@ -1199,6 +1201,18 @@ export default function PatientPortal({ slug, lang = 'en' }) {
         </div>
       )}
 
+      {/* Floating AURA AI Copilot for Patient Portal */}
+      <CopilotWidget 
+        token={token}
+        userRole="PATIENT"
+        username={patient ? patient.name : 'Patient'}
+        patientData={patient}
+        patientPhone={patient?.phone || phone || ''}
+        activeHospital={hospital}
+        activeTab={activeTab}
+        selectedDate={selectedDate}
+        t={t}
+      />
 
     </div>
   );

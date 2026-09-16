@@ -311,13 +311,18 @@ class EntityExtractor:
 
     @classmethod
     def _parse_time(cls, text: str) -> Optional[str]:
-        """Resolves slot times (e.g., 10:00 AM, 2:30 PM, 14:00, 10am)."""
-        # Matches "10:00 AM", "10:30am", "02:00 PM"
-        t_match1 = re.search(r'\b(0?[1-9]|1[0-2]):([0-5]\d)\s*(am|pm)\b', text, re.IGNORECASE)
+        """Resolves slot times including mobile typos (e.g., 10:00 AM, 3;45, 3.20, 2:30 PM, 14:00)."""
+        # Matches "10:00 AM", "10;30am", "02.00 PM", "3;45 PM", "3:20"
+        t_match1 = re.search(r'\b(0?[1-9]|1[0-2])[:;.\s]([0-5]\d)\s*(am|pm)?\b', text, re.IGNORECASE)
         if t_match1:
             hour = int(t_match1.group(1))
             minute = t_match1.group(2)
-            meridiem = t_match1.group(3).upper()
+            mer = t_match1.group(3)
+            if mer:
+                meridiem = mer.upper()
+            else:
+                # Default PM for afternoon OPD hours (1-7), otherwise AM
+                meridiem = "PM" if (hour <= 7 or hour == 12) else "AM"
             return f"{hour:02d}:{minute} {meridiem}"
 
         # Matches "10 AM", "2 PM", "11pm"
@@ -327,14 +332,21 @@ class EntityExtractor:
             meridiem = t_match2.group(2).upper()
             return f"{hour:02d}:00 {meridiem}"
 
-        # Matches 24hr "14:00", "09:30"
-        t_match3 = re.search(r'\b([01]?\d|2[0-3]):([0-5]\d)\b', text)
+        # Matches 24hr "14:00", "15;45", "09:30"
+        t_match3 = re.search(r'\b([01]?\d|2[0-3])[:;.\s]([0-5]\d)\b', text)
         if t_match3:
             h = int(t_match3.group(1))
             m = int(t_match3.group(2))
             meridiem = "PM" if h >= 12 else "AM"
             h_12 = h % 12 or 12
             return f"{h_12:02d}:{m:02d} {meridiem}"
+
+        # Matches "3 baje", "4 baje sham"
+        baje_match = re.search(r'\b(0?[1-9]|1[0-2])\s*baje\b', text, re.IGNORECASE)
+        if baje_match:
+            hour = int(baje_match.group(1))
+            meridiem = "PM" if (hour <= 7 or hour == 12) else "AM"
+            return f"{hour:02d}:00 {meridiem}"
 
         return None
 
@@ -358,7 +370,9 @@ class EntityExtractor:
                 "se", "par", "pe", "chutti", "in", "at", "for", "is", "are", "was", "were",
                 "free", "busy", "who", "which", "that", "having", "have", "has", "had", "any",
                 "all", "some", "good", "best", "near", "can", "will", "do", "does", "list",
-                "name", "names", "details", "check", "tell", "show", "give", "kripya", "please"
+                "name", "names", "details", "check", "tell", "show", "give", "kripya", "please",
+                "sath", "saath", "karna", "karo", "kar", "karen", "chahiye", "chahta", "chahti",
+                "wale", "wali", "booking", "book", "schedule", "consult", "consultation"
             }
             words = candidate.split()
             clean_words = [w for w in words if w.lower() not in stop_words]
@@ -370,25 +384,41 @@ class EntityExtractor:
 
     @classmethod
     def _parse_patient_name(cls, text: str) -> Optional[str]:
-        """Extracts patient name from booking phrases."""
+        """Extracts patient name from booking phrases, strictly filtering medical departments and symptoms."""
         patterns = [
-            r'\b(?:for|patient|patient name|naam|name)\s+(?:is\s+)?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b',
-            r'\b(?:mera naam|patient ka naam)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b'
+            r'\b(?:patient|patient name|marij|naam|name)\s*[:\-]?\s*(?:is\s+)?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b',
+            r'\b(?:mera naam|patient ka naam)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b',
+            r'\bfor\s+(?:patient\s+)?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b'
         ]
-        stop_words = {"doctor", "appointment", "booking", "dr", "slot", "hospital", "cardiology", "today", "tomorrow", "phone", "mobile", "contact", "number", "with", "on", "at", "date"}
+        stop_words = {
+            # Clinical Departments & Specialists
+            "orthopedics", "orthopedic", "ortho", "cardiology", "cardio", "cardiologist",
+            "dermatology", "derma", "dermatologist", "neurology", "neuro", "neurologist",
+            "pediatrics", "pediatric", "pediatrician", "gynecology", "gynae", "gynecologist",
+            "general", "medicine", "physician", "ent", "ophthalmology", "dentistry", "dental",
+            "opd", "casualty", "emergency", "icu", "ward",
+            # Symptoms & Chief Complaints
+            "fever", "cough", "cold", "pain", "headache", "chest pain", "back pain",
+            "stomach", "fracture", "injury", "infection", "vomiting", "weakness", "swelling",
+            # Scheduling & Booking Tokens
+            "doctor", "dr", "appointment", "booking", "book", "slot", "slots", "hospital",
+            "today", "tomorrow", "yesterday", "kal", "aaj", "time", "timing", "timings",
+            "phone", "mobile", "contact", "number", "with", "on", "at", "date",
+            "baje", "am", "pm", "please", "plz", "free", "busy", "fee", "fees",
+            "checkup", "consult", "consultation", "routine", "urgent", "test", "report"
+        }
         for pat in patterns:
             match = re.search(pat, text, re.IGNORECASE)
             if match:
                 cand = match.group(1).strip()
                 words = cand.split()
-                clean_words = []
-                for w in words:
-                    if w.lower() in stop_words:
-                        break
-                    clean_words.append(w)
+                # If the candidate contains or is a medical term, reject it immediately
+                if any(w.lower() in stop_words for w in words):
+                    continue
+                clean_words = [w for w in words if w.lower() not in stop_words]
                 if clean_words:
                     clean_name = " ".join(clean_words)
-                    if len(clean_name) > 1:
+                    if len(clean_name) >= 2 and clean_name.lower() not in stop_words:
                         return clean_name.title()
         return None
 

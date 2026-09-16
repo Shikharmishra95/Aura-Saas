@@ -1,3 +1,4 @@
+import re
 import json
 import uuid
 import logging
@@ -25,17 +26,20 @@ class CopilotTools:
     @staticmethod
     def _build_doctor_search_conditions(clean_name: str):
         """Constructs full-name, single-name, and token-split search clauses for Doctor records."""
-        conds = [
-            func.concat(Doctor.first_name, " ", Doctor.last_name).ilike(f"%{clean_name}%"),
-            Doctor.first_name.ilike(f"%{clean_name}%"),
-            Doctor.last_name.ilike(f"%{clean_name}%")
-        ]
         stopwords = {
-            "dr", "dr.", "doctor", "ya", "aur", "rhe", "rahe", "hai", "hain", "kya", "ko", "par", "pe",
+            "dr", "dr.", "doctor", "ya", "aur", "and", "rhe", "rahe", "hai", "hain", "kya", "ko", "par", "pe",
             "aaj", "kal", "parso", "baith", "baithe", "baithte", "chutti", "leave", "duty", "off", "on",
-            "the", "is", "of", "in", "status", "check", "batao", "dikhao", "please", "sir", "mam"
+            "the", "is", "of", "in", "status", "check", "batao", "dikhao", "please", "sir", "mam", "what",
+            "about", "ka", "ki", "ke", "se", "summary", "record", "performance", "details"
         }
-        tokens = [t.strip() for t in clean_name.split() if t.strip() not in stopwords and len(t.strip()) >= 2]
+        tokens = [t.strip() for t in clean_name.split() if t.strip().lower() not in stopwords and len(t.strip()) >= 2]
+        effective_name = " ".join(tokens) if tokens else clean_name.strip()
+
+        conds = [
+            func.concat(Doctor.first_name, " ", Doctor.last_name).ilike(f"%{effective_name}%"),
+            Doctor.first_name.ilike(f"%{effective_name}%"),
+            Doctor.last_name.ilike(f"%{effective_name}%")
+        ]
         for tok in tokens:
             conds.append(Doctor.first_name.ilike(f"%{tok}%"))
             conds.append(Doctor.last_name.ilike(f"%{tok}%"))
@@ -323,6 +327,193 @@ class CopilotTools:
             "message": f"Doctor leave request has been marked as {new_status}."
         }
 
+    @staticmethod
+    async def get_doctor_metrics(
+        hospital_id: str,
+        doctor_name: str,
+        metric: str = "all",
+        time_range: str = "all",
+        db: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        """Calculates revenue earned, total bookings, completed visits, and cancellations for a specific doctor."""
+        if not db or not hospital_id:
+            return {"error": "Invalid session or tenant context"}
+
+        clean_doc = re.sub(r'^(dr\.?|de|doctor)\s+', '', doctor_name.strip(), flags=re.IGNORECASE).strip()
+        doc_cond = CopilotTools._build_doctor_search_conditions(clean_doc)
+        doc_stmt = select(Doctor, Department).join(Department, Doctor.department_id == Department.id).where(
+            Doctor.hospital_id == hospital_id,
+            doc_cond
+        )
+        matched = (await db.execute(doc_stmt)).first()
+        if not matched:
+            return {"error": f"No active doctor found matching '{doctor_name}' in this hospital."}
+
+        doctor, department = matched
+        today = datetime.now().date()
+        start_date = None
+        end_date = None
+        period_label = "All Time"
+
+        if time_range in ["today", "aaj"]:
+            start_date = today
+            end_date = today
+            period_label = f"Today ({today.strftime('%d %b %Y')})"
+        elif time_range in ["this_month", "month", "mahina"]:
+            start_date = date(today.year, today.month, 1)
+            end_date = today
+            period_label = f"This Month ({today.strftime('%B %Y')})"
+        elif time_range in ["this_week", "week", "hafta"]:
+            start_date = today - timedelta(days=today.weekday())
+            end_date = today
+            period_label = "This Week"
+
+        base_conds = [Appointment.hospital_id == hospital_id, Appointment.doctor_id == doctor.id]
+        if start_date and end_date:
+            if start_date == end_date:
+                base_conds.append(func.date(Appointment.appointment_datetime) == start_date)
+            else:
+                base_conds.append(func.date(Appointment.appointment_datetime) >= start_date)
+                base_conds.append(func.date(Appointment.appointment_datetime) <= end_date)
+
+        stmt_counts = select(
+            func.count(Appointment.id).label("total"),
+            func.sum(case((Appointment.status == "COMPLETED", 1), else_=0)).label("completed"),
+            func.sum(case((Appointment.status == "CANCELLED", 1), else_=0)).label("cancelled"),
+            func.sum(case((Appointment.status == "MISSED", 1), else_=0)).label("missed"),
+            func.sum(case((Appointment.status.in_(["CONFIRMED", "SCHEDULED", "BOOKED"]), 1), else_=0)).label("scheduled")
+        ).where(and_(*base_conds))
+        row = (await db.execute(stmt_counts)).first()
+
+        total_cnt = row.total or 0 if row else 0
+        comp_cnt = int(row.completed or 0) if row else 0
+        canc_cnt = int(row.cancelled or 0) if row else 0
+        miss_cnt = int(row.missed or 0) if row else 0
+        sched_cnt = int(row.scheduled or 0) if row else 0
+
+        fee_per_visit = float(doctor.opd_fees or 500)
+        rev_stmt = select(
+            func.coalesce(func.sum(case((or_(Appointment.payment_status == "PAID", Appointment.status == "COMPLETED"), fee_per_visit), else_=0)), 0.0)
+        ).where(and_(*base_conds))
+        total_rev = float((await db.execute(rev_stmt)).scalar() or 0.0)
+
+        dues_stmt = select(
+            func.coalesce(func.sum(case((and_(Appointment.payment_status != "PAID", Appointment.status.in_(["SCHEDULED", "CONFIRMED", "BOOKED"])), fee_per_visit), else_=0)), 0.0)
+        ).where(and_(*base_conds))
+        pending_dues = float((await db.execute(dues_stmt)).scalar() or 0.0)
+
+        full_doc_name = f"Dr. {doctor.first_name.title()} {doctor.last_name.title()}".strip()
+
+        return {
+            "doctor_name": full_doc_name,
+            "department": department.name,
+            "opd_fee": doctor.opd_fees or 500,
+            "period": period_label,
+            "total_appointments": total_cnt,
+            "completed_consultations": comp_cnt,
+            "cancelled_appointments": canc_cnt,
+            "missed_appointments": miss_cnt,
+            "scheduled_upcoming": sched_cnt,
+            "total_revenue_collected": total_rev,
+            "total_revenue_collected_formatted": f"₹{total_rev:,.0f}",
+            "pending_dues": pending_dues,
+            "pending_dues_formatted": f"₹{pending_dues:,.0f}"
+        }
+
+    @staticmethod
+    async def get_all_doctors_performance(
+        hospital_id: str,
+        time_range: str = "all",
+        db: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        """Compares booking volume, completed visits, cancellations, and revenue generated across all doctors."""
+        if not db or not hospital_id:
+            return {"error": "Invalid session or tenant context"}
+
+        today = datetime.now().date()
+        start_date = None
+        end_date = None
+        period_label = "All Time"
+
+        if time_range in ["today", "aaj"]:
+            start_date = today
+            end_date = today
+            period_label = f"Today ({today.strftime('%d %b %Y')})"
+        elif time_range in ["this_month", "month", "mahina"]:
+            start_date = date(today.year, today.month, 1)
+            end_date = today
+            period_label = f"This Month ({today.strftime('%B %Y')})"
+        elif time_range in ["this_week", "week", "hafta"]:
+            start_date = today - timedelta(days=today.weekday())
+            end_date = today
+            period_label = "This Week"
+
+        doc_stmt = select(Doctor, Department).outerjoin(Department, Doctor.department_id == Department.id).where(
+            Doctor.hospital_id == hospital_id,
+            Doctor.is_active == True
+        )
+        docs = (await db.execute(doc_stmt)).all()
+
+        doctor_stats = []
+        total_hosp_bookings = 0
+        total_hosp_rev = 0.0
+
+        for doctor, department in docs:
+            dept_name = department.name if department else (getattr(doctor, "specialization", None) or "General")
+            base_conds = [Appointment.hospital_id == hospital_id, Appointment.doctor_id == doctor.id]
+            if start_date and end_date:
+                if start_date == end_date:
+                    base_conds.append(func.date(Appointment.appointment_datetime) == start_date)
+                else:
+                    base_conds.append(func.date(Appointment.appointment_datetime) >= start_date)
+                    base_conds.append(func.date(Appointment.appointment_datetime) <= end_date)
+
+            stmt_c = select(
+                func.count(Appointment.id).label("total"),
+                func.sum(case((Appointment.status == "COMPLETED", 1), else_=0)).label("completed"),
+                func.sum(case((Appointment.status == "CANCELLED", 1), else_=0)).label("cancelled"),
+                func.sum(case((Appointment.status == "MISSED", 1), else_=0)).label("missed")
+            ).where(and_(*base_conds))
+            crow = (await db.execute(stmt_c)).first()
+
+            tot = crow.total or 0 if crow else 0
+            comp = int(crow.completed or 0) if crow else 0
+            canc = int(crow.cancelled or 0) if crow else 0
+            miss = int(crow.missed or 0) if crow else 0
+
+            fee_per_visit = float(doctor.opd_fees or 500)
+            r_stmt = select(
+                func.coalesce(func.sum(case((or_(Appointment.payment_status == "PAID", Appointment.status == "COMPLETED"), fee_per_visit), else_=0)), 0.0)
+            ).where(and_(*base_conds))
+            doc_rev = float((await db.execute(r_stmt)).scalar() or 0.0)
+
+            total_hosp_bookings += tot
+            total_hosp_rev += doc_rev
+
+            doctor_stats.append({
+                "doctor_name": f"Dr. {doctor.first_name.title()} {doctor.last_name.title()}".strip(),
+                "department": dept_name,
+                "opd_fee": doctor.opd_fees or 500,
+                "total_bookings": tot,
+                "completed": comp,
+                "cancelled": canc,
+                "missed": miss,
+                "revenue_collected": doc_rev,
+                "revenue_collected_formatted": f"₹{doc_rev:,.0f}"
+            })
+
+        sorted_docs = sorted(doctor_stats, key=lambda x: x["total_bookings"], reverse=True)
+
+        return {
+            "period": period_label,
+            "total_active_doctors": len(docs),
+            "total_hospital_bookings": total_hosp_bookings,
+            "total_hospital_revenue_collected_formatted": f"₹{total_hosp_rev:,.0f}",
+            "total_hospital_revenue_formatted": f"₹{total_hosp_rev:,.0f}",
+            "ranking": sorted_docs,
+            "performance_roster": sorted_docs
+        }
+
     # ==========================================
     # DOMAIN 2: APPOINTMENTS, QUEUE & PATIENTS
     # ==========================================
@@ -514,6 +705,167 @@ class CopilotTools:
             for a, p, d in rows
         ]
         return {"date": target_date, "total_missed_or_cancelled": len(missed_list), "records": missed_list}
+
+    @staticmethod
+    async def get_appointment_status_summary(
+        hospital_id: str,
+        doctor_name: Optional[str] = None,
+        status: Optional[str] = None,
+        time_range: str = "today",
+        date_str: Optional[str] = None,
+        db: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        """
+        Universal metrics aggregator for appointment statuses (CANCELLED, MISSED, COMPLETED, SCHEDULED, CONFIRMED).
+        Supports doctor fuzzy filtering and date range windows (today, yesterday, this_week, this_month, all).
+        """
+        if not db or not hospital_id:
+            return {"error": "Invalid session or tenant context"}
+
+        now_dt = datetime.now()
+        today = now_dt.date()
+
+        # 1. Resolve date boundaries
+        target_date_label = "Today"
+        start_date = None
+        end_date = None
+
+        if date_str:
+            try:
+                parsed_d = datetime.strptime(date_str, "%Y-%m-%d").date()
+                start_date = parsed_d
+                end_date = parsed_d
+                target_date_label = date_str
+            except Exception:
+                start_date = today
+                end_date = today
+        elif time_range == "yesterday":
+            start_date = today - timedelta(days=1)
+            end_date = start_date
+            target_date_label = f"Yesterday ({start_date.strftime('%d %b %Y')})"
+        elif time_range in ["this_week", "week"]:
+            start_date = today - timedelta(days=today.weekday())
+            end_date = today
+            target_date_label = f"This Week ({start_date.strftime('%d %b')} - {today.strftime('%d %b %Y')})"
+        elif time_range in ["this_month", "month"]:
+            start_date = date(today.year, today.month, 1)
+            end_date = today
+            target_date_label = f"This Month ({today.strftime('%B %Y')})"
+        elif time_range in ["all", "all_time", "lifetime"]:
+            start_date = None
+            end_date = None
+            target_date_label = "All Time"
+        else:
+            # Default today
+            start_date = today
+            end_date = today
+            target_date_label = f"Today ({today.strftime('%d %b %Y')})"
+
+        # 2. Resolve Doctor filter if present
+        matched_doctor = None
+        doc_filter_id = None
+        if doctor_name:
+            clean_doc = re.sub(r'^(dr\.?|de|doctor)\s+', '', doctor_name.strip(), flags=re.IGNORECASE).strip()
+            if clean_doc:
+                doc_cond = CopilotTools._build_doctor_search_conditions(clean_doc)
+                doc_stmt = select(Doctor).where(
+                    Doctor.hospital_id == hospital_id,
+                    doc_cond
+                )
+                matched_doctor = (await db.execute(doc_stmt)).scalars().first()
+                if matched_doctor:
+                    doc_filter_id = matched_doctor.id
+
+        # 3. Build Base Conditions
+        base_conds = [Appointment.hospital_id == hospital_id]
+        if doc_filter_id:
+            base_conds.append(Appointment.doctor_id == doc_filter_id)
+        if start_date and end_date:
+            if start_date == end_date:
+                base_conds.append(func.date(Appointment.appointment_datetime) == start_date)
+            else:
+                base_conds.append(func.date(Appointment.appointment_datetime) >= start_date)
+                base_conds.append(func.date(Appointment.appointment_datetime) <= end_date)
+
+        # 4. Aggregation Query
+        agg_stmt = select(
+            func.count(Appointment.id).label("total"),
+            func.sum(case((Appointment.status == "COMPLETED", 1), else_=0)).label("completed"),
+            func.sum(case((Appointment.status == "CANCELLED", 1), else_=0)).label("cancelled"),
+            func.sum(case((Appointment.status == "MISSED", 1), else_=0)).label("missed"),
+            func.sum(case((Appointment.status.in_(["CONFIRMED", "SCHEDULED", "BOOKED"]), 1), else_=0)).label("confirmed_or_scheduled")
+        ).where(and_(*base_conds))
+
+        agg_row = (await db.execute(agg_stmt)).first()
+        total_cnt = agg_row.total or 0 if agg_row else 0
+        completed_cnt = int(agg_row.completed or 0) if agg_row else 0
+        cancelled_cnt = int(agg_row.cancelled or 0) if agg_row else 0
+        missed_cnt = int(agg_row.missed or 0) if agg_row else 0
+        confirmed_cnt = int(agg_row.confirmed_or_scheduled or 0) if agg_row else 0
+
+        # 5. Fetch sample matching records (up to 10)
+        rec_conds = list(base_conds)
+        if status:
+            st_upper = status.upper().strip()
+            if st_upper in ["CANCELLED", "MISSED", "COMPLETED", "CONFIRMED", "SCHEDULED"]:
+                rec_conds.append(Appointment.status == st_upper)
+            elif st_upper in ["MISSED_OR_CANCELLED", "CANCELLED_OR_MISSED"]:
+                rec_conds.append(Appointment.status.in_(["MISSED", "CANCELLED"]))
+
+        rec_stmt = select(Appointment, Patient, Doctor).join(
+            Patient, Appointment.patient_id == Patient.id
+        ).join(
+            Doctor, Appointment.doctor_id == Doctor.id
+        ).where(and_(*rec_conds)).order_by(Appointment.appointment_datetime.desc()).limit(10)
+
+        rec_rows = (await db.execute(rec_stmt)).all()
+        sample_records = [
+            {
+                "patient_name": f"{p.first_name} {p.last_name}".strip(),
+                "phone": p.phone,
+                "doctor": f"Dr. {d.first_name} {d.last_name}",
+                "datetime": a.appointment_datetime.strftime("%d %b, %I:%M %p") if a.appointment_datetime else "N/A",
+                "status": a.status,
+                "reason": a.reason or "General Consultation"
+            }
+            for a, p, d in rec_rows
+        ]
+
+        # 6. Doctor breakdown if no specific doctor was filtered
+        doctor_breakdown = []
+        if not doc_filter_id:
+            dbk_stmt = select(
+                Doctor.first_name, Doctor.last_name,
+                func.count(Appointment.id).label("total"),
+                func.sum(case((Appointment.status == "CANCELLED", 1), else_=0)).label("cancelled"),
+                func.sum(case((Appointment.status == "MISSED", 1), else_=0)).label("missed"),
+                func.sum(case((Appointment.status == "COMPLETED", 1), else_=0)).label("completed")
+            ).join(Appointment, Appointment.doctor_id == Doctor.id)\
+             .where(and_(*base_conds))\
+             .group_by(Doctor.id, Doctor.first_name, Doctor.last_name)
+            
+            for dr in (await db.execute(dbk_stmt)).all():
+                doctor_breakdown.append({
+                    "doctor_name": f"Dr. {dr.first_name} {dr.last_name}",
+                    "total": dr.total or 0,
+                    "completed": int(dr.completed or 0),
+                    "cancelled": int(dr.cancelled or 0),
+                    "missed": int(dr.missed or 0)
+                })
+
+        return {
+            "period": target_date_label,
+            "doctor_name": f"Dr. {matched_doctor.first_name.title()} {matched_doctor.last_name.title()}" if matched_doctor else (doctor_name.title() if doctor_name else None),
+            "doctor_matched": bool(matched_doctor),
+            "queried_status": status,
+            "total_appointments": total_cnt,
+            "completed": completed_cnt,
+            "cancelled": cancelled_cnt,
+            "missed": missed_cnt,
+            "confirmed_or_scheduled": confirmed_cnt,
+            "records": sample_records,
+            "doctor_breakdown": doctor_breakdown
+        }
 
     @staticmethod
     async def book_walkin_appointment(
@@ -1076,6 +1428,7 @@ class CopilotTools:
         expiring_30_days = []
         total_saas_rev = 0.0
         total_calls_all = 0
+        total_calls_today = 0
 
         for h in hospitals:
             doc_cnt = (await db.execute(select(func.count(Doctor.id)).where(Doctor.hospital_id == h.id, Doctor.is_active == True))).scalar() or 0
@@ -1089,11 +1442,19 @@ class CopilotTools:
             sub_rev = float(sub_rev)
             total_saas_rev += sub_rev
 
-            # Calls count
+            # Calls count (All-Time and Today)
             calls_cnt = (await db.execute(
                 select(func.count(CallLog.id)).where(CallLog.hospital_id == h.id)
             )).scalar() or 0
             total_calls_all += calls_cnt
+
+            calls_today_cnt = (await db.execute(
+                select(func.count(CallLog.id)).where(
+                    CallLog.hospital_id == h.id,
+                    func.date(CallLog.created_at) == now
+                )
+            )).scalar() or 0
+            total_calls_today += calls_today_cnt
 
             days_left = None
             if h.plan_expires_at:
@@ -1116,6 +1477,7 @@ class CopilotTools:
                 "saas_revenue": sub_rev,
                 "saas_revenue_formatted": f"₹{sub_rev:,.0f}",
                 "voice_calls_count": calls_cnt,
+                "voice_calls_today": calls_today_cnt,
                 "days_remaining": days_left if days_left is not None else "Active",
                 "status": "ACTIVE" if h.is_active else "SUSPENDED"
             })
@@ -1128,6 +1490,7 @@ class CopilotTools:
             "total_platform_saas_revenue": total_saas_rev,
             "total_platform_saas_revenue_formatted": f"₹{total_saas_rev:,.0f}",
             "total_platform_voice_calls": total_calls_all,
+            "total_platform_voice_calls_today": total_calls_today,
             "top_revenue_hospital": top_hosp["hospital_name"] if top_hosp else "N/A",
             "top_revenue_amount": top_hosp["saas_revenue_formatted"] if top_hosp else "₹0",
             "hospitals_fleet": fleet,

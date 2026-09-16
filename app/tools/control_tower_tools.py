@@ -1,8 +1,9 @@
-﻿import uuid
+import re
+import uuid
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models.appointment import Hospital, Doctor
@@ -227,3 +228,96 @@ class ControlTowerTools:
             "ai_voice_enabled": hospital.ai_voice_enabled,
             "message": f"AI Voice telephony for {hospital.name.strip()} has been {'enabled' if enabled else 'disabled'} successfully."
         }
+
+    @classmethod
+    async def search_platform_hospital(
+        cls,
+        query: str,
+        db: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        """
+        Global platform hospital lookup for SuperAdmin across all tenant hospitals.
+        Returns hospital contact details, phone, email, address, subscription plan, and active doctor count.
+        """
+        if not db:
+            return {"error": "Active database session required."}
+
+        raw_query = (query or "").strip()
+        clean_q = raw_query.lower()
+        stopwords = [
+            "hospital", "hospitals", "hospita", "hosp", "total", "revenue", "all", "time", 
+            "earnings", "earning", "collection", "collections", "dues", "status", "overview",
+            "ka", "ki", "ke", "number", "contact", "phone", "details", "batao", "do", "mujhe", 
+            "info", "search", "find", "lookup", "show", "get", "please", "kaha", "hai"
+        ]
+        for sw in stopwords:
+            clean_q = re.sub(rf'\b{sw}\b', '', clean_q, flags=re.IGNORECASE)
+        clean_q = re.sub(r'[^\w\s]', ' ', clean_q).strip()
+        search_term = f"%{clean_q}%" if clean_q else "%"
+
+        stmt = select(Hospital).where(
+            Hospital.is_active == True,
+            or_(
+                Hospital.name.ilike(search_term),
+                Hospital.slug.ilike(search_term),
+                Hospital.id.ilike(search_term),
+                Hospital.address.ilike(search_term)
+            )
+        ).limit(10)
+        hospitals = (await db.execute(stmt)).scalars().all()
+
+        # Token-based fallback if multiple words remain or typo exists
+        if not hospitals and clean_q:
+            tokens = [w for w in clean_q.split() if len(w) >= 3]
+            for tok in tokens:
+                tok_term = f"%{tok}%"
+                tok_stmt = select(Hospital).where(
+                    Hospital.is_active == True,
+                    or_(
+                        Hospital.name.ilike(tok_term),
+                        Hospital.slug.ilike(tok_term),
+                        Hospital.id.ilike(tok_term)
+                    )
+                ).limit(10)
+                tok_hospitals = (await db.execute(tok_stmt)).scalars().all()
+                if tok_hospitals:
+                    hospitals = tok_hospitals
+                    break
+
+        if not hospitals and clean_q != raw_query.lower():
+            # Fallback search with raw query
+            fallback_term = f"%{raw_query}%"
+            fb_stmt = select(Hospital).where(
+                Hospital.is_active == True,
+                or_(
+                    Hospital.name.ilike(fallback_term),
+                    Hospital.slug.ilike(fallback_term),
+                    Hospital.address.ilike(fallback_term)
+                )
+            ).limit(10)
+            hospitals = (await db.execute(fb_stmt)).scalars().all()
+
+        results = []
+        for h in hospitals:
+            doc_stmt = select(func.count(Doctor.id)).where(Doctor.hospital_id == h.id, Doctor.is_active == True)
+            doc_count = (await db.execute(doc_stmt)).scalar() or 0
+            results.append({
+                "hospital_id": h.id,
+                "name": h.name.strip() if h.name else "Hospital",
+                "phone": h.phone or "N/A",
+                "email": h.email or "N/A",
+                "address": h.address or "N/A",
+                "slug": h.slug,
+                "subscription_plan": h.subscription_plan,
+                "plan_status": h.plan_status,
+                "plan_expires_at": h.plan_expires_at.strftime("%Y-%m-%d") if h.plan_expires_at else "N/A",
+                "ai_voice_enabled": h.ai_voice_enabled,
+                "active_doctors": doc_count
+            })
+
+        return {
+            "query": raw_query,
+            "total_found": len(results),
+            "hospitals": results
+        }
+

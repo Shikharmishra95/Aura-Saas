@@ -121,9 +121,18 @@ class AppointmentTools:
         if not patient_phone or len(patient_phone) < 8:
             return {"success": False, "error": "Patient mobile phone number is required to confirm booking."}
 
-        # Find or create patient in tenant
-        p_stmt = select(Patient).where(Patient.hospital_id == hospital_id, Patient.phone == patient_phone)
-        patient_rec = (await db.execute(p_stmt)).scalar_one_or_none()
+        # Find or create patient in tenant (safely handling duplicate phones)
+        p_stmt = select(Patient).where(Patient.hospital_id == hospital_id, Patient.phone == patient_phone).order_by(Patient.id.desc())
+        patients_found = (await db.execute(p_stmt)).scalars().all()
+        patient_rec = None
+        if patients_found:
+            p_first = patient_full_name.split()[0].lower() if patient_full_name else ""
+            for p in patients_found:
+                if p_first and p.first_name and p_first in p.first_name.lower():
+                    patient_rec = p
+                    break
+            if not patient_rec:
+                patient_rec = patients_found[0]
         if not patient_rec:
             parts = patient_full_name.split(maxsplit=1)
             fname = parts[0] if parts else "Patient"

@@ -111,6 +111,7 @@ async def verify_otp(request: VerifyOTPRequest, db: AsyncSession = Depends(get_d
         "patient": {
             "id": patient.id,
             "name": f"{patient.first_name} {patient.last_name}".strip(),
+            "phone": patient.phone,
             "hospital_id": patient.hospital_id
         }
     }

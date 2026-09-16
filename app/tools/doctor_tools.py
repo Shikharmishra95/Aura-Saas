@@ -25,13 +25,21 @@ class DoctorTools:
     @staticmethod
     def _build_name_filter(name_query: str):
         """Builds multi-clause case-insensitive search for doctor names."""
-        clean = name_query.lower().replace("dr.", "").replace("dr ", "").replace("doctor", "").strip()
+        stopwords = {
+            "dr", "dr.", "doctor", "ya", "aur", "and", "rhe", "rahe", "hai", "hain", "kya", "ko", "par", "pe",
+            "aaj", "kal", "parso", "baith", "baithe", "baithte", "chutti", "leave", "duty", "off", "on",
+            "the", "is", "of", "in", "status", "check", "batao", "dikhao", "please", "sir", "mam", "what",
+            "about", "ka", "ki", "ke", "se", "summary", "record", "performance", "details"
+        }
+        raw_clean = name_query.lower().replace("dr.", "").replace("dr ", "").replace("doctor", "").strip()
+        tokens = [t.strip() for t in raw_clean.split() if t.strip() not in stopwords and len(t.strip()) >= 2]
+        clean = " ".join(tokens) if tokens else raw_clean
+
         conds = [
             func.concat(Doctor.first_name, " ", Doctor.last_name).ilike(f"%{clean}%"),
             Doctor.first_name.ilike(f"%{clean}%"),
             Doctor.last_name.ilike(f"%{clean}%")
         ]
-        tokens = [t.strip() for t in clean.split() if len(t.strip()) >= 2]
         for t in tokens:
             conds.append(Doctor.first_name.ilike(f"%{t}%"))
             conds.append(Doctor.last_name.ilike(f"%{t}%"))

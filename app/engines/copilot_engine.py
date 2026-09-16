@@ -74,6 +74,49 @@ class CopilotEngine:
         return "\n".join(lines)
 
     @classmethod
+    async def _resolve_target_hospital(cls, text: str, db: Optional[AsyncSession]) -> Optional[Dict[str, Any]]:
+        """
+        Fuzzy resolves target hospital entity from user query text.
+        Handles variations, slugs, IDs, and typos like 'rao hospita' -> 'Rao Hospital', 'balaji' -> 'Balaji Hospital', 'apollo' -> 'apolo'.
+        """
+        if not text or not db:
+            return None
+        try:
+            from app.database.models.appointment import Hospital
+            from sqlalchemy import select
+            stmt = select(Hospital).where(Hospital.is_active == True)
+            hospitals = (await db.execute(stmt)).scalars().all()
+            if not hospitals:
+                return None
+
+            t_lower = text.lower()
+            clean_t = re.sub(r'[^\w\s]', ' ', t_lower)
+            tokens = set(clean_t.split())
+
+            for h in hospitals:
+                h_name = (h.name or "").strip()
+                h_slug = (h.slug or "").strip()
+                h_id = h.id.strip()
+
+                # Direct matches on ID or slug
+                if h_id.lower() in t_lower or (h_slug and h_slug.lower() in t_lower):
+                    return {"id": h.id, "name": h_name, "slug": h_slug}
+
+                # Core words in hospital name (ignore generic words like hospital/clinic)
+                h_words = [w for w in re.sub(r'[^\w\s]', ' ', h_name.lower()).split() if w not in ["hospital", "clinic", "healthcare", "hms", "medical", "center", "centre"]]
+                for hw in h_words:
+                    if len(hw) >= 3 and hw in tokens:
+                        return {"id": h.id, "name": h_name, "slug": h_slug}
+                    if len(hw) >= 3 and hw in t_lower:
+                        return {"id": h.id, "name": h_name, "slug": h_slug}
+                    # Fuzzy match for common typos (e.g. apolo vs apollo)
+                    if hw == "apolo" and ("apollo" in t_lower or "apolo" in t_lower):
+                        return {"id": h.id, "name": h_name, "slug": h_slug}
+        except Exception as e:
+            logger.debug(f"Error resolving target hospital: {e}")
+        return None
+
+    @classmethod
     def _format_markdown_fallback(cls, tool_name: str, result: Dict[str, Any]) -> str:
         """Converts raw tool output to clean Markdown tables and lists."""
         if not result:
@@ -81,6 +124,23 @@ class CopilotEngine:
             
         if "error" in result:
             return f"⚠️ {result['error']}"
+
+        if tool_name == "search_platform_hospital":
+            hospitals = result.get("hospitals", [])
+            if not hospitals:
+                return f"🔍 **Platform Hospital Lookup:**\n\nNo tenant hospitals found matching your query."
+            lines = [f"### 🏥 Platform Hospital Lookup ({len(hospitals)} found)\n"]
+            for h in hospitals:
+                lines.append(f"#### **{h.get('name', 'Hospital')}**")
+                lines.append(f"* **Contact Phone:** 📱 **{h.get('phone', 'N/A')}**")
+                lines.append(f"* **Email:** ✉️ {h.get('email', 'N/A')}")
+                lines.append(f"* **Location:** 📍 {h.get('city', 'N/A')} — {h.get('address', 'N/A')}")
+                lines.append(f"* **Subscription Plan:** 💳 **{h.get('subscription_plan', 'STARTER')}** (Status: `{h.get('plan_status', 'ACTIVE')}`)")
+                lines.append(f"* **Expires:** ⏳ {h.get('plan_expires_at', 'N/A')}")
+                lines.append(f"* **Active Doctors:** 🩺 **{h.get('active_doctors', 0)} doctors**")
+                lines.append(f"* **AI Telephony:** {'✅ Enabled' if h.get('ai_voice_enabled') else '❌ Disabled'}")
+                lines.append(f"* **Public Portal:** `/portal/{h.get('slug', '')}`\n")
+            return "\n".join(lines)
 
         if tool_name == "get_missed_and_cancelled_list":
             records = result.get("records", [])
@@ -114,6 +174,48 @@ class CopilotEngine:
                 lines.append(f"| {d.get('doctor_name')} | {d.get('department')} | {d.get('weekly_working_days')} days/wk | {d.get('total_appointments')} | {d.get('completed')} | {d.get('cancelled_or_missed')} | {d.get('total_revenue_generated')} |")
             return "\n".join(lines)
 
+        elif tool_name == "get_all_doctors_performance":
+            ranking = result.get("ranking") or result.get("performance_roster", [])
+            period = result.get("period", "All Time")
+            tot_b = result.get("total_hospital_bookings", 0)
+            tot_rev = result.get("total_hospital_revenue_collected_formatted") or result.get("total_hospital_revenue_formatted", "₹0")
+            if not ranking:
+                return f"No doctor booking performance records found for {period}."
+            lines = [
+                f"### 📊 Doctor-Wise Booking & Performance Report ({period})\n",
+                f"* **Total Hospital Bookings:** **{tot_b}**",
+                f"* **Total Revenue Generated:** **{tot_rev}**\n",
+                "| Doctor | Department | Total Booked | Completed | Cancelled | Revenue Collected |",
+                "|---|---|---|---|---|---|"
+            ]
+            for d in ranking:
+                lines.append(f"| **{d.get('doctor_name')}** | {d.get('department')} | {d.get('total_bookings')} | {d.get('completed')} | {d.get('cancelled')} | {d.get('revenue_collected_formatted')} |")
+            return "\n".join(lines)
+
+        elif tool_name == "get_doctor_metrics":
+            d_name = result.get("doctor_name", "Doctor")
+            dept = result.get("department", "OPD")
+            period = result.get("period", "All Time")
+            fee_str = f"₹{result.get('opd_fee', 0):,}"
+            tot_b = result.get("total_appointments") if result.get("total_appointments") is not None else result.get("total_bookings", 0)
+            comp = result.get("completed_consultations") if result.get("completed_consultations") is not None else result.get("completed", 0)
+            canc = result.get("cancelled_appointments") if result.get("cancelled_appointments") is not None else result.get("cancelled", 0)
+            miss = result.get("missed_appointments") if result.get("missed_appointments") is not None else result.get("missed", 0)
+            canc_miss = canc + miss if (canc or miss) else 0
+            rev_fmt = result.get("total_revenue_collected_formatted") or result.get("revenue_collected_formatted", "₹0")
+            dues_fmt = result.get("pending_dues_formatted", "₹0")
+            lines = [
+                f"### 🩺 Performance & Revenue: {d_name} ({period})\n",
+                f"* **Department:** {dept}",
+                f"* **OPD Consultation Fee:** {fee_str}",
+                f"* **Total Appointments Booked:** **{tot_b}**",
+                f"* **Completed Consultations:** **{comp}**",
+                f"* **Cancelled / Missed:** **{canc_miss}** ({canc} cancelled, {miss} missed)",
+                f"* **Total Revenue Collected:** **{rev_fmt}**",
+                f"* **Pending Dues:** **{dues_fmt}**"
+            ]
+            return "\n".join(lines)
+
         elif tool_name == "get_revenue_and_dues":
             return (
                 f"### 💰 Financial & OPD Revenue Summary ({result.get('period', 'Today')})\n\n"
@@ -133,6 +235,49 @@ class CopilotEngine:
                 f"* **Missed / Cancelled:** {result.get('missed_or_cancelled', 0)}\n\n"
                 f"**Per-Doctor Breakdown:**\n{doc_lines if doc_lines else '  * No doctor bookings for today.'}"
             )
+
+        elif tool_name == "get_appointment_status_summary":
+            period = result.get("period", "Today")
+            doc_name = result.get("doctor_name")
+            total = result.get("total_appointments", 0)
+            completed = result.get("completed", 0)
+            cancelled = result.get("cancelled", 0)
+            missed = result.get("missed", 0)
+            confirmed = result.get("confirmed_or_scheduled", 0)
+            records = result.get("records", [])
+            breakdown = result.get("doctor_breakdown", [])
+
+            header = f"### 📊 Appointment Status Summary — {doc_name} ({period})" if doc_name else f"### 📊 Appointment Status Summary ({period})"
+            lines = [header, ""]
+
+            lines.append(f"* **Total Appointments:** **{total}**")
+            lines.append(f"* **Completed Visits:** **{completed}**")
+            lines.append(f"* **Confirmed / Scheduled (In Queue):** **{confirmed}**")
+            lines.append(f"* **Cancelled Bookings:** **{cancelled}**")
+            lines.append(f"* **Missed / No-Show:** **{missed}**")
+            lines.append("")
+
+            if records:
+                lines.append(f"**Detailed Records ({len(records)}):**")
+                for r in records:
+                    lines.append(f"* **{r.get('patient_name')}** ({r.get('phone')}) — **{r.get('status')}**")
+                    lines.append(f"  * Doctor: {r.get('doctor')} | Time: {r.get('datetime')}")
+                    if r.get("reason"):
+                        lines.append(f"  * Reason: {r.get('reason')}")
+                lines.append("")
+            elif cancelled == 0 and missed == 0 and total > 0:
+                lines.append(f"✅ *All {total} scheduled appointments are active with 0 cancellations or no-shows.*")
+            elif total == 0:
+                lines.append(f"ℹ️ *No appointment records found for this period.*")
+
+            if breakdown and len(breakdown) > 1:
+                lines.append("\n**Doctor-Wise Status Breakdown:**")
+                lines.append("| Doctor | Total | Completed | Cancelled | Missed |")
+                lines.append("|---|---|---|---|---|")
+                for db_item in breakdown:
+                    lines.append(f"| {db_item.get('doctor_name')} | {db_item.get('total')} | {db_item.get('completed')} | {db_item.get('cancelled')} | {db_item.get('missed')} |")
+
+            return "\n".join(lines)
 
         elif tool_name == "get_platform_control_tower_overview":
             fleet = result.get("hospitals_fleet", [])
@@ -801,6 +946,17 @@ class CopilotEngine:
         normalized_msg = entity_extractor.normalize_text(user_message)
         extracted: ExtractedEntities = entity_extractor.extract_entities(normalized_msg)
         context_state: SessionContextState = conversation_memory.get_context_state(hospital_id, user_id, session_id)
+
+        # Logged-in Patient Identity Binding (Permanent Account Phone Lock)
+        role_upper = (role or "").upper().replace(" ", "_")
+        if role_upper == "PATIENT" and actor_profile:
+            acc_phone = actor_profile.get("patient_phone")
+            acc_name = actor_profile.get("patient_name")
+            if acc_phone:
+                context_state.patient_phone = acc_phone
+            if not context_state.patient_name and acc_name:
+                context_state.patient_name = acc_name
+
         if extracted.doctor_name:
             context_state.current_doctor_name = extracted.doctor_name
         if extracted.date_str:
@@ -812,7 +968,9 @@ class CopilotEngine:
         if extracted.patient_name:
             context_state.patient_name = extracted.patient_name
         if extracted.patient_phone:
-            context_state.patient_phone = extracted.patient_phone
+            # If not a logged-in patient with a locked phone, allow phone update
+            if not (role_upper == "PATIENT" and actor_profile and actor_profile.get("patient_phone")):
+                context_state.patient_phone = extracted.patient_phone
         if extracted.appointment_id:
             context_state.last_appointment_id = extracted.appointment_id
 
@@ -853,24 +1011,73 @@ class CopilotEngine:
                 "route": "ACTION"
             }
 
-        # 2. 5-Way Intent Routing
+        # 2. Check offline deterministic match first (guarantees sub-20ms response, slot-filling continuity, and zero-hallucination)
+        offline_res = await cls._match_offline_intent(
+            user_message, role, hospital_id, user_id, db,
+            context_state=context_state, actor_profile=actor_profile
+        )
+        if offline_res:
+            offline_res["route"] = "LIVE_DATA"
+            if not offline_res.get("suggestions"):
+                offline_res["suggestions"] = cls._build_contextual_suggestions(
+                    role=role,
+                    tool_used=offline_res.get("tool_used"),
+                    query=user_message,
+                    reply=offline_res.get("reply", "")
+                )
+            return offline_res
+
+        # 3. 5-Way Intent Routing
         decision: RouterDecision = await intent_router.route_query(
             query=user_message,
             role=role,
             hospital_id=hospital_id
         )
 
-        # 3. Handle UNKNOWN Route - Try Offline Deterministic Matching before generic fallback
+        # 4. Handle UNKNOWN Route - Try generic fallback with Actionable Suggestions
         if decision.route == RouteType.UNKNOWN:
-            offline_unknown_res = await cls._match_offline_intent(
-                user_message, role, hospital_id, user_id, db,
-                context_state=context_state, actor_profile=actor_profile
-            )
-            if offline_unknown_res:
-                offline_unknown_res["route"] = "LIVE_DATA"
-                return offline_unknown_res
             reply = decision.suggested_reply or intent_router._generate_safe_fallback(role)
-            return {"reply": reply, "route": decision.route.value}
+            role_up = (role or "STAFF").upper()
+            if role_up in ["SUPER_ADMIN", "SUPERADMIN"]:
+                unknown_suggestions = [
+                    "Platform monthly revenue overview",
+                    "How many hospitals are active on AURA platform?",
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Total AI voice calls processed today"
+                ]
+            elif role_up in ["ADMIN", "HOSPITAL_ADMIN"]:
+                unknown_suggestions = [
+                    "How many appointments were cancelled today?",
+                    "What is our total OPD revenue for this month?",
+                    "Show doctor-wise booking performance",
+                    "Which doctors are on duty today?"
+                ]
+            elif role_up == "DOCTOR":
+                unknown_suggestions = [
+                    "How many patients are waiting in my queue?",
+                    "What are my shift timings for tomorrow?",
+                    "Today's total consulted patients",
+                    "What are my OPD earnings today?"
+                ]
+            elif role_up == "PATIENT":
+                unknown_suggestions = [
+                    "I want to book an appointment",
+                    "Which doctors are available today?",
+                    "What are the doctor consultation fees?",
+                    "Check my live token position"
+                ]
+            else:
+                unknown_suggestions = [
+                    "Show live OPD queue summary",
+                    "Check daily cash register",
+                    "Which doctors are available today?",
+                    "How many appointments were cancelled today?"
+                ]
+            return {
+                "reply": reply,
+                "route": decision.route.value,
+                "suggestions": unknown_suggestions
+            }
 
         # 4. Handle Pure KNOWLEDGE Route (Instant Sub-200ms RAG response)
         if decision.route == RouteType.KNOWLEDGE and decision.knowledge_results:
@@ -963,7 +1170,33 @@ LIVE HOSPITAL ADMIN METRICS & DOCTOR STATUS TODAY ({filter_date}):
             except Exception as snap_e:
                 logger.debug(f"Admin live block snapshot error: {snap_e}")
 
-        system_instruction = f"""You are AURA AI Copilot, the official enterprise intelligent healthcare assistant for {hospital_name}.
+        # Super Admin Real-Time Grounding Snapshot & Fleet Context
+        super_admin_live_block = ""
+        if role_upper in ["SUPER_ADMIN", "SUPERADMIN"] and db:
+            try:
+                from app.tools.control_tower_tools import ControlTowerTools
+                fleet_overview = await ControlTowerTools.get_platform_control_tower_overview(db=db)
+                fleet = fleet_overview.get("hospitals_fleet", [])
+                fleet_lines = []
+                for h in fleet:
+                    fleet_lines.append(
+                        f"- Hospital: '{h.get('hospital_name')}' | ID: '{h.get('hospital_id')}' | Plan: {h.get('subscription_plan')} | Status: {h.get('status')} | Doctors: {h.get('active_doctors')} | Total Appointments: {h.get('total_appointments')}"
+                    )
+                super_admin_live_block = f"""
+PLATFORM OWNER (SUPER ADMIN) CONTROL TOWER & FLEET DIRECTIVES:
+- Authenticated Mode: SUPER_ADMIN (Platform Owner / Control Tower).
+- ROLE BOUNDARY: You are the Platform Owner assistant, NOT a hospital receptionist. NEVER book patient OPD appointments or ask for patient details. If a user asks to book an appointment, clearly inform them that patient bookings are handled via individual hospital reception portals.
+- REGISTERED TENANT HOSPITALS ON AURA PLATFORM:
+{chr(10).join(fleet_lines)}
+- CRITICAL TOOL & QUERY DIRECTIVES:
+  * When asked about revenue, metrics, or details for a specific hospital (e.g. 'rao hospita', 'balaji', 'apollo'), map it to its registered Hospital ID above (e.g. 'Rao Hospital' -> 'HOSP-RAOH-4893') and pass that hospital_id to 'get_revenue_and_dues(hospital_id=...)' or 'get_comprehensive_doctor_analytics(hospital_id=...)'.
+  * When using 'search_platform_hospital', pass ONLY the core hospital name keyword (e.g. 'rao'), NOT full query strings.
+"""
+            except Exception as sa_e:
+                logger.debug(f"Super admin live block snapshot error: {sa_e}")
+
+        hosp_display = 'AURA Platform Control Tower' if role_upper in ['SUPER_ADMIN', 'SUPERADMIN'] else hospital_name
+        system_instruction = f"""You are AURA AI Copilot, the official enterprise intelligent healthcare assistant for {hosp_display}.
 Current Authenticated Context:
 - User Role: {role}
 - Hospital: {hospital_name} (ID: {hospital_id or 'Platform'})
@@ -978,6 +1211,7 @@ Current Authenticated Context:
 {rag_context_block}
 {hospital_directory}
 {admin_live_block}
+{super_admin_live_block}
 
 STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
 1. ZERO HALLUCINATION: NEVER invent, guess, or fabricate appointment IDs (apt_...), doctor IDs, patient medical records, slot timings, prices (₹), queue numbers, or financial metrics.
@@ -1174,20 +1408,184 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
         )
         if offline_res:
             offline_res["route"] = decision.route.value
+            if not offline_res.get("suggestions"):
+                offline_res["suggestions"] = cls._build_contextual_suggestions(
+                    role=role,
+                    tool_used=offline_res.get("tool_used"),
+                    query=user_message,
+                    reply=offline_res.get("reply", "")
+                )
             return offline_res
 
-        # Specific, helpful smart guidance (NEVER repeat generic welcome intro)
-        role_label = (role or "STAFF").replace("_", " ").title()
+        # Contextual, Enterprise-Grade Smart Fallback with Actionable Suggestions
+        role_upper = (role or "STAFF").upper()
+        if role_upper in ["SUPER_ADMIN", "SUPERADMIN"]:
+            fallback_reply = (
+                f"I couldn't locate specific platform metrics matching *\"{user_message}\"*. "
+                f"As **Platform SuperAdmin**, you have direct access to global multi-tenant telemetry. "
+                f"Try one of these real-time overviews:"
+            )
+            fallback_suggestions = [
+                "Platform monthly revenue overview",
+                "How many hospitals are active on AURA platform?",
+                "Which subscriptions are expiring in next 30 days?",
+                "Total AI voice calls processed today"
+            ]
+        elif role_upper in ["ADMIN", "HOSPITAL_ADMIN"]:
+            fallback_reply = (
+                f"I checked hospital live records, but couldn't find a direct record matching *\"{user_message}\"*. "
+                f"As **Hospital Administrator**, you can instantly query live OPD, staff schedules, and financial collections:"
+            )
+            fallback_suggestions = [
+                "How many appointments were cancelled today?",
+                "What is our total OPD revenue for this month?",
+                "Show doctor-wise booking performance",
+                "Which doctors are on duty today?"
+            ]
+        elif role_upper == "DOCTOR":
+            fallback_reply = (
+                f"I couldn't find that specific clinical entry for *\"{user_message}\"*. "
+                f"Here are quick actions for your consultation shift:"
+            )
+            fallback_suggestions = [
+                "How many patients are waiting in my queue?",
+                "What are my shift timings for tomorrow?",
+                "Today's total consulted patients",
+                "What are my OPD earnings today?"
+            ]
+        elif role_upper == "PATIENT":
+            fallback_reply = (
+                f"I couldn't find that in our patient service directory for *\"{user_message}\"*. "
+                f"I can assist you with appointment booking, doctor schedules, and hospital consultation fees:"
+            )
+            fallback_suggestions = [
+                "I want to book an appointment",
+                "Which doctors are available today?",
+                "What are the doctor consultation fees?",
+                "Check my live token position"
+            ]
+        else:
+            fallback_reply = (
+                f"I couldn't find a direct match for *\"{user_message}\"*. "
+                f"Here are front desk actions you can execute right now:"
+            )
+            fallback_suggestions = [
+                "Show live OPD queue summary",
+                "Check daily cash register",
+                "Which doctors are available today?",
+                "How many appointments were cancelled today?"
+            ]
+
+        bullets = "\n".join([f"* **{sug}**" for sug in fallback_suggestions])
+        full_reply = f"{fallback_reply}\n\n{bullets}"
         return {
-            "reply": (
-                f"I couldn't find a direct record matching *\"{user_message}\"*. As a **{role_label}**, you can ask me to:\n\n"
-                f"* **Check doctor schedules & working days** (*'Show doctor schedules this week'*)\n"
-                f"* **Review revenue & collection dues** (*'All time pending collection dues summary'*)\n"
-                f"* **View live queues & consulted patients** (*'Show my live queue'*)\n"
-                f"* **Explore hospital departments** (*'Which departments exist in hospital'*)"
-            ),
-            "route": decision.route.value
+            "reply": full_reply,
+            "route": decision.route.value,
+            "suggestions": fallback_suggestions
         }
+
+    @classmethod
+    def _build_contextual_suggestions(cls, role: str, tool_used: Optional[str], query: str, reply: str) -> List[str]:
+        """Generates 3-4 smart, highly relevant next-step query pills strictly related to the answered topic."""
+        role_up = (role or "STAFF").upper()
+        q = (query or "").lower()
+        t = (tool_used or "").lower()
+
+        if role_up in ["SUPER_ADMIN", "SUPERADMIN"]:
+            if "voice" in q or "call" in q or "telemetry" in t:
+                return [
+                    "Show platform error telemetry",
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Platform monthly revenue overview",
+                    "Show all active hospital tenants"
+                ]
+            if "expir" in q or "renew" in q:
+                return [
+                    "Show all active hospital tenants",
+                    "Platform monthly revenue overview",
+                    "Total AI voice calls processed today"
+                ]
+            if "revenue" in q or "saas" in q or "money" in q:
+                return [
+                    "Which hospital generates maximum revenue?",
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Total AI voice calls processed today"
+                ]
+            if "error" in q or "incident" in q or "telemetry" in q:
+                return [
+                    "Total AI voice calls processed today",
+                    "Security audit trail",
+                    "Platform monthly revenue overview"
+                ]
+            return [
+                "Platform monthly revenue overview",
+                "Which subscriptions are expiring in next 30 days?",
+                "Total AI voice calls processed today",
+                "Show all active hospital tenants"
+            ]
+
+        if role_up in ["ADMIN", "HOSPITAL_ADMIN"]:
+            if any(w in q for w in ["cancel", "miss", "status", "appointment", "booking", "patient"]):
+                return [
+                    "Which doctors are on duty today and available?",
+                    "What is our total OPD revenue for this month?",
+                    "Show pending patient dues & unpaid bills",
+                    "Show doctor-wise booking performance"
+                ]
+            if any(w in q for w in ["revenue", "due", "finance", "collection", "fee", "earning", "cash"]):
+                return [
+                    "Show pending patient dues & unpaid bills",
+                    "Which department generated highest revenue?",
+                    "How many appointments were cancelled today?",
+                    "Which doctors are on duty today?"
+                ]
+            if any(w in q for w in ["doctor", "duty", "availab", "roster", "leave", "shift"]):
+                return [
+                    "How many appointments were cancelled today?",
+                    "Show doctor-wise booking performance",
+                    "What is our total OPD revenue for this month?",
+                    "What is our current subscription plan validity?"
+                ]
+            return [
+                "How many appointments were cancelled today?",
+                "What is our total OPD revenue for this month?",
+                "Which doctors are on duty today and available?",
+                "Show pending patient dues & unpaid bills"
+            ]
+
+        if role_up == "DOCTOR":
+            if any(w in q for w in ["queue", "token", "patient", "waiting"]):
+                return [
+                    "What is the next patient's chief complaint?",
+                    "Today's total consulted patients",
+                    "What are my shift timings for tomorrow?"
+                ]
+            return [
+                "How many patients are waiting in my queue?",
+                "What are my shift timings for tomorrow?",
+                "Today's total consulted patients",
+                "What are my OPD earnings today?"
+            ]
+
+        if role_up == "PATIENT":
+            if any(w in q for w in ["book", "slot", "appointment", "schedule"]):
+                return [
+                    "Which doctors are available today?",
+                    "What are the doctor consultation fees?",
+                    "Check my current appointment token status"
+                ]
+            return [
+                "I want to book an appointment",
+                "Which doctors are available today?",
+                "What are the doctor consultation fees?",
+                "Check my live token position"
+            ]
+
+        return [
+            "Which doctors are available today?",
+            "How many appointments were cancelled today?",
+            "What is our total OPD revenue for this month?"
+        ]
 
     @classmethod
     async def _execute_groq_react_loop(
@@ -1444,16 +1842,70 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             except Exception as intel_e:
                 logger.warning(f"HospitalDirectoryIntel evaluation error: {intel_e}")
 
+        # Check if user has an active pending confirmation token
+        pending_tok = conversation_memory.get_latest_pending_token(hospital_id, user_id)
+        has_pending_token = bool(pending_tok)
+
         # 1B. Conversational Multi-Turn Appointment Booking Flow
         booking_kw = [
-            "want book", "want to book", "book for", "book appointment", "appointment book",
-            "slot book", "book slot", "booking karo", "parcha banao", "nayi booking",
-            "book kar do", "book kr do", "appointment schedule", "schedule appointment", "ek appointment"
+            r"\bwant\s+to?\s*book\b", r"\bbook\s+for\b", r"\bbook\s+an?\s+appointment\b",
+            r"\bappointment\s+book\b", r"\bbook\s+appointment\b", r"\bslot\s+book\b",
+            r"\bbook\s+slot\b", r"\bbooking\s+karo\b", r"\bparcha\s+banao\b",
+            r"\bnayi\s+booking\b", r"\bbook\s+kar\s+do\b", r"\bbook\s+kr\s+do\b",
+            r"\bappointment\s+schedule\b", r"\bschedule\s+appointment\b", r"\bek\s+appointment\b",
+            r"\bdoctor\s+ke\s+sa?th\b", r"\bappointment\s+chahi?e\b"
         ]
-        is_analytics_query = any(w in msg_lower for w in ["performance", "report", "stats", "matrix", "analysis", "analytics", "history", "trend", "breakdown", "load"])
+        has_explicit_booking_kw = any(re.search(pat, msg_lower) for pat in booking_kw)
+
+        is_analytics_query = any(w in msg_lower for w in [
+            "performance", "report", "stats", "statistics", "matrix", "analysis", "analytics",
+            "history", "trend", "breakdown", "load", "total", "summary", "count", "kitne",
+            "kitna", "how many", "all time", "revenue", "kamai", "earning", "earnings", "collection",
+            "dues", "booked", "completed", "cancelled", "missed", "status", "ranking", "fleet"
+        ])
         has_booking_entities = bool(re.search(r'\b([6-9]\d{9})\b', norm_msg) and any(w in msg_lower for w in ["patient", "dr", "doctor", "pm", "am", "appointment", "slot"]))
-        is_booking_trigger = (any(w in msg_lower for w in booking_kw) or has_booking_entities) and not is_analytics_query
+        
+        # Modification trigger: user correcting or modifying details (time, name, doctor, date) while confirmation is pending
+        is_modification_request = has_pending_token and (
+            any(w in msg_lower for w in ["change", "badal", "nahi", "not", "time", "slot", "naam", "name", "doctor", "dr", "date", "tarikh", "baje"]) or
+            bool(entity_extractor._parse_time(norm_msg)) or
+            bool(re.search(r'\b(0?[1-9]|1[0-2])[:;.\s]([0-5]\d)\b', norm_msg))
+        )
+
+        is_booking_trigger = (has_explicit_booking_kw or has_booking_entities or is_modification_request) and not is_analytics_query
         is_in_booking_flow = bool(context_state and getattr(context_state, "booking_in_progress", False)) and not is_analytics_query
+
+        # STRICT ROLE FIREWALL: ADMIN, HOSPITAL_ADMIN, SUPER_ADMIN, and DOCTOR never run conversational patient booking flow
+        is_admin_or_doc = role_upper in ["ADMIN", "HOSPITAL_ADMIN", "SUPER_ADMIN", "SUPERADMIN", "DOCTOR"]
+        if is_admin_or_doc or is_analytics_query:
+            is_booking_trigger = False
+            is_in_booking_flow = False
+            if context_state and getattr(context_state, "booking_in_progress", False):
+                context_state.booking_in_progress = False
+
+        # SUPER ADMIN ROLE BOUNDARY: Platform Owner does not perform patient OPD bookings
+        if role_upper in ["SUPER_ADMIN", "SUPERADMIN"] and (has_explicit_booking_kw or any(w in msg_lower for w in ["book", "paointment", "appointment", "parcha", "booking", "nayi booking"])) and not is_analytics_query:
+            suggestions = [
+                "Show all active hospital tenants",
+                "Rao Hospital total revenue all time",
+                "Which hospital generates maximum revenue?",
+                "Platform monthly revenue overview"
+            ]
+            return {
+                "reply": (
+                    "🛡️ **Platform Owner (Super Admin) Notice:**\n\n"
+                    "Aap **Platform Control Tower** (Super Admin) portal me hain. Patient OPD appointment bookings individual hospital (jaise Rao Hospital ya Balaji Hospital) ke receptionist portal ya patient portal se perform hoti hain.\n\n"
+                    "Platform Owner ke roop me aap:\n"
+                    "* Kisi bhi hospital ka **total revenue & booking count** dekh sakte hain (e.g. *'Rao Hospital total revenue all time'*)\n"
+                    "* **Active doctors & rosters** inspect kar sakte hain\n"
+                    "* **Subscription plans & renewals** manage kar sakte hain\n"
+                    "* **AI Telemetry & platform error logs** monitor kar sakte hain\n\n"
+                    "Agar aap kisi specific hospital ke stats dekhna chahte hain, to kripya hospital ka naam batayein."
+                ),
+                "tool_used": "super_admin_role_boundary",
+                "tool_result": {"status": "ROLE_RESTRICTED", "role": "SUPER_ADMIN"},
+                "suggestions": suggestions
+            }
 
         if is_booking_trigger or is_in_booking_flow:
             if any(w in msg_lower for w in ["cancel", "nahi chahiye", "rehne do", "stop", "abort"]):
@@ -1461,20 +1913,8 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     context_state.booking_in_progress = False
                 return {"reply": "❌ Appointment booking has been cancelled.", "tool_used": "book_appointment", "tool_result": {"cancelled": True}}
 
-            # Extract time slot if provided (e.g. "3 PM", "03:00 PM", "11:30 am", "5 baje")
-            time_match = re.search(r'\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)\b', norm_msg, re.IGNORECASE)
-            baje_match = re.search(r'\b(\d{1,2})\s*(?:baje|pm|am)\b', norm_msg, re.IGNORECASE)
-            parsed_time = None
-            if time_match:
-                hr = int(time_match.group(1))
-                mn = time_match.group(2) or "00"
-                mer = time_match.group(3).upper()
-                parsed_time = f"{hr:02d}:{mn} {mer}"
-            elif baje_match:
-                hr = int(baje_match.group(1))
-                mer = "PM" if hr < 8 or hr == 12 else "AM"
-                parsed_time = f"{hr:02d}:00 {mer}"
-
+            # Extract time slot if provided (supports 3:45, 3;45, 3.45, 3;20, 10:00 AM, 5 baje)
+            parsed_time = entity_extractor._parse_time(norm_msg)
             if parsed_time and context_state:
                 context_state.selected_time = parsed_time
             if target_date and context_state:
@@ -1490,39 +1930,75 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                 )
                 active_docs = (await db.execute(d_stmt)).all()
 
-            # Check if user mentioned a doctor's name
+            # Check if user mentioned a doctor's name or department
             matched_doc = None
             matched_dept = None
-            for d, dept in active_docs:
-                full_n = f"{d.first_name} {d.last_name}".lower()
-                if d.first_name.lower() in msg_lower or d.last_name.lower() in msg_lower or full_n in msg_lower or dept.name.lower() in msg_lower:
-                    matched_doc = d
-                    matched_dept = dept
-                    break
+            has_doc_intent = any(w in msg_lower for w in ["dr", "doctor", "change", "badal", "dusre", "dusra", "switch"])
+            already_has_doc = bool(context_state and context_state.current_doctor_name)
+            can_switch_doc = not already_has_doc or has_doc_intent
+
+            if can_switch_doc:
+                for d, dept in active_docs:
+                    full_n = f"{d.first_name} {d.last_name}".lower()
+                    fname = d.first_name.lower()
+                    lname = d.last_name.lower()
+                    
+                    full_match = full_n in msg_lower
+                    fname_match = bool(re.search(rf"\b{re.escape(fname)}\b", msg_lower))
+                    lname_match = bool(re.search(rf"\b(?:dr\.?|doctor)\s+{re.escape(lname)}\b", msg_lower))
+                    dept_match = bool(re.search(rf"\b{re.escape(dept.name.lower())}\b", msg_lower))
+
+                    if full_match or fname_match or lname_match or dept_match:
+                        matched_doc = d
+                        matched_dept = dept
+                        break
 
             if matched_doc and context_state:
                 context_state.current_doctor_name = f"Dr. {matched_doc.first_name} {matched_doc.last_name}"
                 context_state.current_doctor_id = matched_doc.id
                 context_state.department = matched_dept.name
 
-            # Check for phone number
+            # Auto-fill patient details and STRICTLY LOCK PHONE if role is PATIENT
+            if role_upper == "PATIENT" and actor_profile and context_state:
+                acc_phone = actor_profile.get("patient_phone")
+                acc_name = actor_profile.get("patient_name")
+                if acc_phone:
+                    context_state.patient_phone = acc_phone
+                if not context_state.patient_name and acc_name:
+                    context_state.patient_name = acc_name
+
+            # Check for phone number (Only allowed for guests/staff, NOT allowed to change logged-in patient's account phone)
             phone_match = re.search(r'\b([6-9]\d{9})\b', norm_msg)
             if phone_match and context_state:
-                context_state.patient_phone = phone_match.group(1)
+                if not (role_upper == "PATIENT" and actor_profile and actor_profile.get("patient_phone")):
+                    context_state.patient_phone = phone_match.group(1)
 
-            # Check for patient name
-            pat_match = re.search(r'(?:patient|name|marij|naam)\s*[:\-]?\s*([a-zA-Z\s]{3,25})', norm_msg, re.IGNORECASE)
-            if pat_match and context_state:
-                clean_pname = pat_match.group(1).strip().title()
-                if clean_pname and len(clean_pname) >= 3:
-                    context_state.patient_name = clean_pname
-
-            # Auto-fill patient details if role is PATIENT
-            if role_upper == "PATIENT" and actor_profile and context_state:
-                if not context_state.patient_name:
-                    context_state.patient_name = actor_profile.get("patient_name")
-                if not context_state.patient_phone:
-                    context_state.patient_phone = actor_profile.get("patient_phone")
+            # Check for patient name modification or direct entry
+            pat_mod_match = re.search(r'\b(?:naam|name|patient)\s*(?:change\s*karke|badal\s*ke|change\s*to|is|hai|karo|kar\s*do|to)?\s*[:\-]?\s*([a-zA-Z\s]{2,30})', norm_msg, re.IGNORECASE)
+            if pat_mod_match and context_state:
+                cand_raw = pat_mod_match.group(1).strip()
+                p_extracted = entity_extractor._parse_patient_name(f"patient {cand_raw}")
+                if p_extracted:
+                    context_state.patient_name = p_extracted
+                elif cand_raw and not any(w.lower() in ["change", "badal", "karo", "kar", "do", "hai", "is", "for", "to", "doctor", "appointment", "time", "date", "slot"] for w in cand_raw.split()):
+                    if len(cand_raw) >= 2:
+                        context_state.patient_name = cand_raw.title()
+            elif is_in_booking_flow and context_state and not context_state.patient_name:
+                candidate = norm_msg
+                if phone_match:
+                    candidate = candidate.replace(phone_match.group(1), "")
+                candidate = re.sub(r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm|baje)\b', '', candidate, flags=re.IGNORECASE)
+                candidate = re.sub(r'\b(?:book|booking|appointment|karo|kar|do|chahiye|please|plz|for|mera|meri|naam|hai|patient|slot|confirm|haan|yes)\b', '', candidate, flags=re.IGNORECASE)
+                candidate = re.sub(r'[^a-zA-Z\s]', ' ', candidate).strip()
+                candidate = re.sub(r'\s+', ' ', candidate)
+                if 2 <= len(candidate) <= 35:
+                    words = candidate.split()
+                    if not any(w.lower() in ["cancel", "stop", "no", "nahi", "exit", "help"] for w in words):
+                        p_cand = entity_extractor._parse_patient_name(f"patient {candidate}")
+                        if p_cand:
+                            context_state.patient_name = p_cand
+                        elif len(candidate) >= 2:
+                            context_state.patient_name = candidate.title()
 
             cur_doc = context_state.current_doctor_name if context_state else None
             cur_time = (context_state.selected_time if context_state else None) or "10:00 AM"
@@ -1534,6 +2010,7 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             if not cur_doc:
                 if context_state:
                     context_state.booking_in_progress = True
+                    context_state.dialog_state = "AWAITING_DOCTOR"
                 doc_lines = []
                 for d, dept in active_docs:
                     fee = d.opd_fees or 500
@@ -1546,31 +2023,53 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     f"I can help you schedule an appointment{time_note}! 🏥\n\n"
                     f"**Which doctor would you like to consult?**\n\n"
                     f"{doc_list_text}\n\n"
-                    f"> 💬 *Reply with the Doctor's name and Patient's name & 10-digit mobile number.*"
+                    f"> 💬 *Reply with the Doctor's name or Specialization.*"
                 )
                 return {"reply": reply, "tool_used": "book_appointment", "tool_result": {"status": "AWAITING_DOCTOR"}}
 
-            # CASE 2: Doctor is known, but Patient Name or Phone is missing
+            # CASE 2: Doctor is known, but Patient Name or Phone is missing (Only for guests where details are genuinely unknown)
             if not cur_pname or not cur_phone:
                 if context_state:
                     context_state.booking_in_progress = True
+                    context_state.dialog_state = "AWAITING_PATIENT_DETAILS"
                 fee_val = 500
                 for d, dept in active_docs:
                     if d.id == (context_state.current_doctor_id if context_state else None) or (d.first_name.lower() in cur_doc.lower()):
                         fee_val = d.opd_fees or 500
                         break
 
-                reply = (
-                    f"### 🗓️ Booking with {cur_doc}\n\n"
-                    f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
-                    f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
-                    f"* **Consultation Fee:** ₹{fee_val}\n\n"
-                    f"Please provide the **Patient's Full Name** and **10-digit Mobile Number** to proceed.\n\n"
-                    f"> *Example: 'Patient Rahul Sharma, 9876543210'*"
-                )
+                if cur_pname and not cur_phone:
+                    reply = (
+                        f"### 🗓️ Booking with {cur_doc}\n\n"
+                        f"* **Patient Name:** **{cur_pname}**\n"
+                        f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
+                        f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
+                        f"* **Consultation Fee:** ₹{fee_val}\n\n"
+                        f"Please provide the **10-digit Mobile Number** for **{cur_pname}** to proceed.\n\n"
+                        f"> *Example: '9876543210'*"
+                    )
+                elif cur_phone and not cur_pname:
+                    reply = (
+                        f"### 🗓️ Booking with {cur_doc}\n\n"
+                        f"* **Mobile:** **{cur_phone}**\n"
+                        f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
+                        f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
+                        f"* **Consultation Fee:** ₹{fee_val}\n\n"
+                        f"Please provide the **Patient's Full Name** to proceed.\n\n"
+                        f"> *Example: 'Rahul Sharma'*"
+                    )
+                else:
+                    reply = (
+                        f"### 🗓️ Booking with {cur_doc}\n\n"
+                        f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
+                        f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
+                        f"* **Consultation Fee:** ₹{fee_val}\n\n"
+                        f"Please provide the **Patient's Full Name** and **10-digit Mobile Number** to proceed.\n\n"
+                        f"> *Example: 'Patient Rahul Sharma, 9876543210'*"
+                    )
                 return {"reply": reply, "tool_used": "book_appointment", "tool_result": {"status": "AWAITING_PATIENT_DETAILS"}}
 
-            # CASE 3: All details are available -> Stage confirmation
+            # CASE 3: All details are available -> Stage or Update confirmation
             fee_val = 500
             for d, dept in active_docs:
                 if d.id == (context_state.current_doctor_id if context_state else None) or (d.first_name.lower() in cur_doc.lower()):
@@ -1594,42 +2093,148 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             if context_state:
                 context_state.booking_in_progress = False
 
+            card_title = "📋 Updated Appointment Booking Details" if is_modification_request else "📋 Confirm Appointment Booking Details"
+            phone_note = f"\n> 🔒 *Note: Mobile number ({cur_phone}) is permanently linked to your patient account.*" if (role_upper == "PATIENT" and actor_profile and actor_profile.get("patient_phone")) else ""
+
             reply = (
-                f"### 📋 Confirm Appointment Booking Details\n\n"
+                f"### {card_title}\n\n"
                 f"Please verify the details below before generating the token:\n\n"
                 f"* **Doctor:** **{cur_doc}** ({getattr(context_state, 'department', 'OPD')})\n"
                 f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
                 f"* **Patient:** **{cur_pname}** (📱 {cur_phone})\n"
                 f"* **OPD Fee:** ₹{fee_val}\n\n"
-                f"> 💬 Reply **\"confirm\"** or **\"haan\"** to confirm and issue the OPD Token."
+                f"> 💬 Reply **\"confirm\"** or **\"haan\"** to confirm and issue the OPD Token.{phone_note}"
             )
             return {"reply": reply, "tool_used": "book_appointment", "tool_result": {"status": "CONFIRMATION_REQUIRED", "confirmation_token": conf_tok.token}}
 
         # 1C. Doctor-wise Booking Performance & Analytics Matcher
-        if any(w in msg_lower for w in ["booking performance", "doctor-wise", "doctor wise", "performance report", "booking stats", "doctor performance"]):
-            from app.engines.analytics_query_builder import analytics_query_builder
-            res = await analytics_query_builder.execute("ADMIN_DOCTOR_LOAD_COMPARISON", {}, {"hospital_id": hospital_id, "role": role}, db)
-            return {"reply": cls._format_markdown_fallback("run_analytics_query", res), "tool_used": "run_analytics_query", "tool_result": res}
+        if any(w in msg_lower for w in [
+            "booking performance", "doctor-wise", "doctor wise", "performance report",
+            "booking stats", "doctor performance", "doctor ranking", "doctors performance",
+            "doctor wise booking", "doctor wise performance"
+        ]):
+            t_range = "all"
+            if any(w in msg_lower for w in ["today", "aaj"]):
+                t_range = "today"
+            elif any(w in msg_lower for w in ["yesterday", "kal"]):
+                t_range = "yesterday"
+            elif any(w in msg_lower for w in ["month", "mahine", "is mahine"]):
+                t_range = "this_month"
+            elif any(w in msg_lower for w in ["week", "hafte"]):
+                t_range = "this_week"
+            res = await CopilotTools.get_all_doctors_performance(hospital_id=hospital_id or "", time_range=t_range, db=db)
+            return {
+                "reply": cls._format_markdown_fallback("get_all_doctors_performance", res),
+                "tool_used": "get_all_doctors_performance",
+                "tool_result": res,
+                "suggestions": [
+                    "What is our total OPD revenue for this month?",
+                    "Which doctors are on duty today?",
+                    "Show live OPD queue summary"
+                ]
+            }
+
+        # 1C-2. Specific Doctor Metrics & Performance Matcher (Bookings, Revenue, Completed, Cancelled)
+        doc_metric_match = re.search(r'\b(?:dr\.?|doctor)\s+([a-zA-Z]+)', msg_lower)
+        target_doc_cand = doc_metric_match.group(1) if doc_metric_match else None
+        if not target_doc_cand:
+            for d_token in ["vivek", "nitin", "shiva", "dewedi", "pransh", "agni", "mishra"]:
+                if d_token in msg_lower:
+                    target_doc_cand = d_token
+                    break
+
+        if target_doc_cand and any(w in msg_lower for w in ["performance", "metrics", "stats", "load", "booking count", "total bookings", "kitne booking", "kitne appointment", "total appointment", "revenue", "kamai", "collection", "earning", "earnings"]):
+            t_range = "all"
+            if any(w in msg_lower for w in ["today", "aaj"]):
+                t_range = "today"
+            elif any(w in msg_lower for w in ["yesterday", "kal"]):
+                t_range = "yesterday"
+            elif any(w in msg_lower for w in ["month", "mahine", "is mahine"]):
+                t_range = "this_month"
+            elif any(w in msg_lower for w in ["week", "hafte"]):
+                t_range = "this_week"
+
+            res = await CopilotTools.get_doctor_metrics(
+                hospital_id=hospital_id or "",
+                doctor_name=target_doc_cand,
+                metric="all",
+                time_range=t_range,
+                db=db
+            )
+            if not res.get("error"):
+                return {
+                    "reply": cls._format_markdown_fallback("get_doctor_metrics", res),
+                    "tool_used": "get_doctor_metrics",
+                    "tool_result": res,
+                    "suggestions": [
+                        "Show doctor-wise booking performance",
+                        f"Check Dr. {target_doc_cand.title()} shift timings",
+                        "What is our total OPD revenue for this month?"
+                    ]
+                }
 
         # 1D. All Doctor Shift Timings and OPD Fees Matcher
         if any(w in msg_lower for w in ["shift timings and opd fees", "all doctor shift timings", "doctor shift timings", "timings and opd fees", "shift timings and fees", "show all doctor"]):
             res = await CopilotTools.get_comprehensive_doctor_analytics(hospital_id=hospital_id or "", time_range="all", db=db)
             return {"reply": cls._format_markdown_fallback("get_comprehensive_doctor_analytics", res), "tool_used": "get_comprehensive_doctor_analytics", "tool_result": res}
 
-        # 1E. Hospital Admin Subscription & License Validity Matcher
-        if any(w in msg_lower for w in ["subscription validity", "subscription expiry", "subscription plan", "plan validity", "license validity", "plan status", "days remaining in subscription", "subscription"]):
+        # 1E. Hospital Admin Subscription & License Validity Matcher (Tenant Admin)
+        if role_upper not in ["SUPER_ADMIN", "SUPERADMIN"] and any(w in msg_lower for w in ["subscription validity", "subscription expiry", "subscription plan", "plan validity", "license validity", "plan status", "days remaining in subscription", "plan expire", "subscription"]):
             res = await CopilotTools.get_hospital_subscription_info(hospital_id=hospital_id or "", db=db)
             return {"reply": cls._format_markdown_fallback("get_hospital_subscription_info", res), "tool_used": "get_hospital_subscription_info", "tool_result": res}
 
         # 2. SuperAdmin Platform Control Tower & Subscriptions
         if role_upper in ["SUPER_ADMIN", "SUPERADMIN"]:
+            # Platform Monthly Revenue / SaaS Collections / MRR Overview
+            if any(w in msg_lower for w in [
+                "platform monthly revenue", "monthly revenue overview", "platform revenue",
+                "saas revenue", "platform collections", "subscription revenue", "mrr",
+                "total platform revenue", "revenue overview"
+            ]) or ("platform" in msg_lower and "revenue" in msg_lower) or ("revenue" in msg_lower and any(w in msg_lower for w in ["monthly", "subscription", "saas", "collection", "collections"])):
+                res = await CopilotTools.get_platform_control_tower_overview(db=db)
+                total_saas_rev = res.get("total_platform_saas_revenue_formatted", "₹0")
+                total_hosp = res.get("total_active_hospitals", 0)
+                fleet = res.get("hospitals_fleet", [])
+                total_calls = res.get("total_platform_voice_calls", 0)
+
+                rev_lines = [
+                    f"### 🌐 Platform SaaS Revenue Overview\n",
+                    f"* **Total Platform SaaS Revenue:** **{total_saas_rev}** (Razorpay Live Collections)",
+                    f"* **Active Onboarded Hospitals:** **{total_hosp}**",
+                    f"* **Total AI Voice Calls Processed:** **{total_calls}**\n",
+                    "**Tenant Hospital SaaS Breakdown:**",
+                    "| Hospital | Plan | SaaS Revenue | Doctors | Bookings | Days Left | Status |",
+                    "|---|---|---|---|---|---|---|"
+                ]
+                for h in fleet:
+                    rev_lines.append(f"| {h.get('hospital_name')} | {h.get('subscription_plan')} | {h.get('saas_revenue_formatted', '₹0')} | {h.get('active_doctors')} | {h.get('total_appointments')} | {h.get('days_remaining', 'N/A')} | {h.get('status')} |")
+
+                reply = "\n".join(rev_lines)
+                suggestions = [
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Total AI voice calls processed today",
+                    "Which hospital generates maximum revenue?",
+                    "Show all active hospital tenants"
+                ]
+                return {
+                    "reply": reply,
+                    "tool_used": "get_platform_control_tower_overview",
+                    "tool_result": res,
+                    "suggestions": suggestions
+                }
+
             if re.search(r'\b(active hospitals?|hospitals? (are )?active|how many hospitals?|hospital count|number of hospitals?|kitne hospitals?)\b', msg_lower):
                 res = await CopilotTools.get_platform_control_tower_overview(db=db)
                 fleet = res.get("hospitals_fleet", [])
                 total = res.get("total_active_hospitals", len(fleet))
                 h_list = "\n".join([f"{i}. **{h.get('hospital_name')}** (Plan: {h.get('subscription_plan')}, Doctors: {h.get('active_doctors')})" for i, h in enumerate(fleet, 1)])
                 reply = f"There are currently **{total} active hospitals** on the AURA platform:\n\n{h_list}"
-                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res}
+                suggestions = [
+                    "Which hospital generates maximum revenue?",
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Total AI voice calls processed today"
+                ]
+                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res, "suggestions": suggestions}
 
             if any(w in msg_lower for w in ["expiring", "subscription expiring", "renew", "renewal", "30 days", "expire"]):
                 res = await CopilotTools.get_platform_control_tower_overview(db=db)
@@ -1642,7 +2247,12 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     reply = f"### ⏳ Subscriptions Expiring Soon (Next 30 Days)\n\nFound **{len(exp_list)} hospital(s)** requiring renewal:\n\n{exp_items}"
                 else:
                     reply = "### ⏳ Subscriptions Expiring Status\n\n* **Expiring in Next 30 Days:** **0 hospitals**\n* All current hospitals have active subscriptions valid beyond 30 days."
-                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res}
+                suggestions = [
+                    "Show all active hospital tenants",
+                    "Platform monthly revenue overview",
+                    "Total AI voice calls processed today"
+                ]
+                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res, "suggestions": suggestions}
 
             if any(w in msg_lower for w in ["maximum revenue", "maxmimum revenue", "max revenue", "highest revenue", "top revenue", "jyada kamai", "sabse jyada", "generate maximum", "generates maximum"]):
                 res = await CopilotTools.get_platform_control_tower_overview(db=db)
@@ -1655,23 +2265,73 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     for h in sorted(fleet, key=lambda x: x.get('saas_revenue', 0), reverse=True)
                 ])
                 reply = f"### 🏆 Top Revenue Generating Hospital\n\n**{top_hosp}** generates the highest platform revenue with **{top_amt}** in SaaS subscriptions.\n\n**Platform Revenue Breakdown (Total: {total_rev}):**\n{rev_breakdown}"
-                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res}
+                suggestions = [
+                    "Platform monthly revenue overview",
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Total AI voice calls processed today"
+                ]
+                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res, "suggestions": suggestions}
 
             if any(w in msg_lower for w in ["voice call", "voice calls", "call logs", "calls processed", "ai calls", "calls today"]):
                 res = await CopilotTools.get_platform_control_tower_overview(db=db)
                 total_calls = res.get("total_platform_voice_calls", 0)
+                today_calls = res.get("total_platform_voice_calls_today", 0)
                 fleet = res.get("hospitals_fleet", [])
-                call_breakdown = "\n".join([f"* **{h.get('hospital_name')}**: **{h.get('voice_calls_count', 0)} calls**" for h in fleet])
-                reply = f"### 🎙️ Platform AI Voice Telemetry\n\n* **Total AI Voice Calls Processed:** **{total_calls} calls**\n\n**Hospital Breakdown:**\n{call_breakdown}"
-                return {"reply": reply, "tool_used": "get_platform_control_tower_overview", "tool_result": res}
+
+                is_today = any(w in msg_lower for w in ["today", "aaj", "current day"])
+                if is_today:
+                    call_breakdown = "\n".join([f"* **{h.get('hospital_name')}**: **{h.get('voice_calls_today', 0)} calls today** (All-time: {h.get('voice_calls_count', 0)})" for h in fleet])
+                    reply = (
+                        f"### 🎙️ Platform AI Voice Telemetry (Today)\n\n"
+                        f"* **AI Voice Calls Processed Today:** **{today_calls} calls**\n"
+                        f"* **Platform Lifetime Total:** **{total_calls} calls**\n\n"
+                        f"**Hospital Breakdown (Today):**\n{call_breakdown}"
+                    )
+                else:
+                    call_breakdown = "\n".join([f"* **{h.get('hospital_name')}**: **{h.get('voice_calls_count', 0)} calls** (Today: {h.get('voice_calls_today', 0)})" for h in fleet])
+                    reply = (
+                        f"### 🎙️ Platform AI Voice Telemetry\n\n"
+                        f"* **Total AI Voice Calls Processed:** **{total_calls} calls**\n"
+                        f"* **Today's Activity:** **{today_calls} calls**\n\n"
+                        f"**Hospital Breakdown:**\n{call_breakdown}"
+                    )
+
+                suggestions = [
+                    "Show platform error telemetry",
+                    "Which subscriptions are expiring in next 30 days?",
+                    "Platform monthly revenue overview",
+                    "Show all active hospital tenants"
+                ]
+                return {
+                    "reply": reply,
+                    "tool_used": "get_platform_control_tower_overview",
+                    "tool_result": res,
+                    "suggestions": suggestions
+                }
 
             if any(w in msg_lower for w in ["error log", "error logs", "platform errors", "system errors", "error telemetry"]):
                 res = await CopilotTools.get_platform_error_telemetry(db=db)
-                return {"reply": cls._format_markdown_fallback("get_platform_error_telemetry", res), "tool_used": "get_platform_error_telemetry", "tool_result": res}
+                suggestions = [
+                    "Total AI voice calls processed today",
+                    "Security audit trail",
+                    "Platform monthly revenue overview"
+                ]
+                return {"reply": cls._format_markdown_fallback("get_platform_error_telemetry", res), "tool_used": "get_platform_error_telemetry", "tool_result": res, "suggestions": suggestions}
 
             if any(w in msg_lower for w in ["audit trail", "audit log", "security trail", "who changed"]):
                 res = await CopilotTools.get_platform_audit_trail(db=db)
-                return {"reply": cls._format_markdown_fallback("get_platform_audit_trail", res), "tool_used": "get_platform_audit_trail", "tool_result": res}
+                suggestions = [
+                    "Show platform error telemetry",
+                    "Platform monthly revenue overview",
+                    "Show all active hospital tenants"
+                ]
+                return {"reply": cls._format_markdown_fallback("get_platform_audit_trail", res), "tool_used": "get_platform_audit_trail", "tool_result": res, "suggestions": suggestions}
+
+            # SuperAdmin Tenant Hospital Lookup (Contact details, phone, plan, status)
+            if (any(w in msg_lower for w in ["hospital", "clinic", "tenant"]) and any(w in msg_lower for w in ["number", "phone", "contact", "detail", "details", "info", "address", "kaun", "search", "find", "batao", "do", "kaha", "view"])) or ("balaji" in msg_lower) or ("hosp-" in msg_lower):
+                from app.tools.control_tower_tools import ControlTowerTools
+                res = await ControlTowerTools.search_platform_hospital(query=user_message, db=db)
+                return {"reply": cls._format_markdown_fallback("search_platform_hospital", res), "tool_used": "search_platform_hospital", "tool_result": res}
 
         # 3. Doctor Personal Queries (Using Actor Profile)
         if role_upper == "DOCTOR":
@@ -1842,17 +2502,150 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
         # 7. Total Appointments (All-Time & Date Scoped)
         if any(w in msg_lower for w in [
             "total appointment", "total appointments", "all time appointment", "all time appointments",
-            "appointments of all time", "total bookings", "how many appointments of all time", "kitne total appointment"
+            "appointments of all time", "total bookings", "how many appointments of all time", "kitne total appointment",
+            "appointment booked all time", "appointments booked all time", "total appointment booked", "total appointments booked"
         ]):
-            res = await CopilotTools.get_queue_statistics(hospital_id=hospital_id or "", date_str=target_date if any(w in msg_lower for w in ["today", "aaj", "kal", "tomorrow"]) else None, db=db)
-            return {"reply": cls._format_markdown_fallback("get_queue_statistics", res), "tool_used": "get_queue_statistics", "tool_result": res}
+            t_range = "all" if any(w in msg_lower for w in ["all time", "lifetime", "total all", "overall", "all"]) else ("today" if any(w in msg_lower for w in ["today", "aaj"]) else "all")
+            res = await CopilotTools.get_appointment_status_summary(
+                hospital_id=hospital_id or "",
+                doctor_name=None,
+                status=None,
+                time_range=t_range,
+                date_str=target_date if any(w in msg_lower for w in ["today", "aaj"]) else None,
+                db=db
+            )
+            return {
+                "reply": cls._format_markdown_fallback("get_appointment_status_summary", res),
+                "tool_used": "get_appointment_status_summary",
+                "tool_result": res,
+                "suggestions": [
+                    "Show doctor-wise booking performance",
+                    "What is our total OPD revenue for this month?",
+                    "Which doctors are on duty today?"
+                ]
+            }
+
+        # 7B. Universal Appointment Status Metrics (Cancelled, Missed, Completed, Scheduled)
+        is_status_query = (
+            any(w in msg_lower for w in ["cancelled", "canceled", "cancled", "canceld", "missed", "no-show", "no show", "noshow", "complete", "completed", "consulted"]) and
+            any(w in msg_lower for w in ["appointment", "appointments", "booking", "bookings", "visit", "visits", "patient", "patients", "how many", "total", "count", "kitne", "batao", "list"])
+        ) or any(w in msg_lower for w in [
+            "missed bookings", "cancelled bookings", "complete bookings", "completed bookings",
+            "missed appointments", "cancelled appointments", "completed appointments", "cancelled today",
+            "missed today", "completed today"
+        ])
+        
+        if is_status_query:
+            # 1. Doctor fuzzy extraction
+            doc_candidate = None
+            doc_match = re.search(r'\b(dr\.?|de|doctor)\s+([a-zA-Z]+)', msg_lower)
+            if doc_match:
+                doc_candidate = doc_match.group(2)
+            else:
+                for d_token in ["vivek", "nitin", "shiva", "dewedi", "pransh", "agni", "mishra"]:
+                    if d_token in msg_lower:
+                        doc_candidate = d_token
+                        break
+            
+            # 2. Time range
+            t_range = "today"
+            if any(w in msg_lower for w in ["yesterday", "kal", "beeta"]):
+                t_range = "yesterday"
+            elif any(w in msg_lower for w in ["month", "mahine", "is mahine"]):
+                t_range = "this_month"
+            elif any(w in msg_lower for w in ["week", "hafte"]):
+                t_range = "this_week"
+            elif any(w in msg_lower for w in ["all time", "lifetime", "total all", "overall"]):
+                t_range = "all"
+
+            # 3. Status filter
+            st_filter = None
+            has_cancel = any(w in msg_lower for w in ["cancel", "canceled", "cancelled", "cancled"])
+            has_miss = any(w in msg_lower for w in ["miss", "missed", "no-show", "no show"])
+            has_comp = any(w in msg_lower for w in ["complete", "completed", "consulted"])
+
+            # If user explicitly asked for one status only
+            if has_cancel and not (has_miss or has_comp):
+                st_filter = "CANCELLED"
+            elif has_miss and not (has_cancel or has_comp):
+                st_filter = "MISSED"
+            elif has_comp and not (has_cancel or has_miss):
+                st_filter = "COMPLETED"
+
+            res = await CopilotTools.get_appointment_status_summary(
+                hospital_id=hospital_id or "",
+                doctor_name=doc_candidate,
+                status=st_filter,
+                time_range=t_range,
+                date_str=target_date if any(w in msg_lower for w in ["today", "aaj"]) else None,
+                db=db
+            )
+
+            suggestions = [
+                "What is our total OPD revenue for this month?",
+                "Which doctors are on duty today?",
+                "Show live OPD queue summary"
+            ]
+            if doc_candidate:
+                doc_clean = res.get("doctor_name") or f"Dr. {doc_candidate.title()}"
+                suggestions.insert(0, f"Check {doc_clean} shift timings")
+
+            return {
+                "reply": cls._format_markdown_fallback("get_appointment_status_summary", res),
+                "tool_used": "get_appointment_status_summary",
+                "tool_result": res,
+                "suggestions": suggestions[:3]
+            }
 
         # 8. Revenue, Payments & Dues (All-Time, Monthly, Daily)
         if any(w in msg_lower for w in ["revenue", "paisa", "rupaye", "money", "collected", "collection", "dues", "kamai", "paid", "unpaid", "pending collection"]):
             t_range = "all" if any(w in msg_lower for w in ["all time", "lifetime", "total", "overall", "all"]) else ("month" if any(w in msg_lower for w in ["month", "mahine", "is mahine"]) else "today")
-            res = await CopilotTools.get_revenue_and_dues(hospital_id=hospital_id or "", time_range=t_range, role=role, db=db)
+
+            # Resolve target hospital if specified or if in SuperAdmin context
+            resolved_hosp = None
+            effective_hospital_id = hospital_id or ""
+            effective_hospital_name = (actor_profile.get("hospital_name") if actor_profile else None) or "Hospital"
+            if db:
+                resolved_hosp = await cls._resolve_target_hospital(user_message, db)
+                if resolved_hosp:
+                    effective_hospital_id = resolved_hosp["id"]
+                    effective_hospital_name = resolved_hosp["name"]
+
+            # Check if user is asking for a specific doctor's revenue
+            doc_candidate = None
+            doc_match = re.search(r'\b(?:dr\.?|doctor)\s+([a-zA-Z]+)', msg_lower)
+            if doc_match:
+                doc_candidate = doc_match.group(1)
+            else:
+                for d_token in ["vivek", "nitin", "shiva", "dewedi", "pransh", "agni", "mishra"]:
+                    if d_token in msg_lower:
+                        doc_candidate = d_token
+                        break
+
+            if doc_candidate:
+                res = await CopilotTools.get_doctor_metrics(
+                    hospital_id=effective_hospital_id,
+                    doctor_name=doc_candidate,
+                    metric="revenue",
+                    time_range=t_range,
+                    db=db
+                )
+                if not res.get("error"):
+                    return {
+                        "reply": cls._format_markdown_fallback("get_doctor_metrics", res),
+                        "tool_used": "get_doctor_metrics",
+                        "tool_result": res,
+                        "suggestions": [
+                            "Show doctor-wise booking performance",
+                            f"Check Dr. {doc_candidate.title()} shift timings",
+                            "What is our total OPD revenue for this month?"
+                        ]
+                    }
+
+            res = await CopilotTools.get_revenue_and_dues(hospital_id=effective_hospital_id, time_range=t_range, role=role, db=db)
+            prefix = f"{effective_hospital_name} — " if (resolved_hosp or (effective_hospital_name and effective_hospital_name not in ['Hospital', 'Platform', 'AURA Hospital'])) else ""
             reply = (
-                f"### 💰 Financial & OPD Revenue Summary ({res.get('period', 'Today')})\n\n"
+                f"### 💰 {prefix}Financial & OPD Revenue Summary ({res.get('period', 'Today')})\n\n"
                 f"* **Total Appointments Booked:** {res.get('total_appointments', 0)}\n"
                 f"* **Total Revenue Collected (Paid):** **{res.get('total_collected_formatted', '₹0')}** ({res.get('paid_transactions', 0)} transactions)\n"
                 f"* **Pending Collection / Dues:** **{res.get('pending_dues_formatted', '₹0')}** ({res.get('pending_collection_count', 0)} pending)"

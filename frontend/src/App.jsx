@@ -632,6 +632,7 @@ function App() {
     localStorage.removeItem('user_id');
     localStorage.removeItem('active_tab');
     localStorage.setItem('redirect_login', 'true');
+    sessionStorage.clear();
     window.location.reload();
   };
 
@@ -2157,7 +2158,7 @@ function App() {
           <div style={{ flexGrow: 1, display: 'flex', flexDirection: userRole === 'RECEPTIONIST' ? 'row' : 'column' }}>
             
             {/* 📌 Left Vertical Sidebar for Receptionist Role */}
-            {userRole === 'RECEPTIONIST' && (
+            {userRole === 'RECEPTIONIST' && !activeHospital?.is_expired && (
               <aside style={{ 
                 width: '240px', 
                 background: '#FFFFFF', 
@@ -2191,7 +2192,7 @@ function App() {
             )}
 
             {/* Hospital Admin Top Navigation Bar */}
-            {userRole === 'ADMIN' && (
+            {userRole === 'ADMIN' && !activeHospital?.is_expired && (
               <div className="tab-container" style={{ margin: '0 0 16px 0' }}>
                 <button onClick={() => { setActiveTab('admin_overview'); if (hospitalId) fetchHospitalStaff(hospitalId); }} className={`tab-btn ${activeTab === 'admin_overview' ? 'active' : ''}`}><Activity size={18} /> {t('adminOverview')}</button>
                 <button onClick={() => setActiveTab('staff_management')} className={`tab-btn ${activeTab === 'staff_management' ? 'active' : ''}`}><Shield size={18} /> {t('staffManagement')}</button>
@@ -2201,10 +2202,140 @@ function App() {
             )}
 
             {/* Content viewports */}
-            <div style={{ flexGrow: 1, padding: userRole === 'RECEPTIONIST' ? '24px' : '0' }}>
+            <div style={{ flexGrow: 1, padding: (userRole === 'RECEPTIONIST' && !activeHospital?.is_expired) ? '24px' : '0' }}>
 
-              {/* 1. RECEPTIONIST: Live Schedule Tab */}
-              {activeTab === 'overview' && userRole === 'RECEPTIONIST' && (
+              {/* ── HARD SUBSCRIPTION PAYWALL LOCKOUT SCREEN ── */}
+              {activeHospital?.is_expired && userRole !== 'SUPER_ADMIN' ? (
+                <div style={{
+                  maxWidth: '740px',
+                  margin: '40px auto',
+                  background: '#FFFFFF',
+                  borderRadius: '24px',
+                  padding: '48px 36px',
+                  textAlign: 'center',
+                  boxShadow: '0 20px 60px rgba(220, 38, 38, 0.12)',
+                  border: '2px solid #FECACA',
+                  animation: 'fadeIn 0.4s ease'
+                }}>
+                  <div style={{
+                    width: '80px', height: '80px', borderRadius: '50%',
+                    background: '#FEF2F2', border: '2px solid #FCA5A5',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '40px', margin: '0 auto 20px auto'
+                  }}>
+                    🔒
+                  </div>
+
+                  <span style={{
+                    background: '#FEE2E2', color: '#DC2626', border: '1.5px solid #FCA5A5',
+                    padding: '6px 16px', borderRadius: '20px', fontSize: '12px', fontWeight: 800,
+                    letterSpacing: '0.05em', textTransform: 'uppercase'
+                  }}>
+                    🚨 Service Suspended — Plan Expired
+                  </span>
+
+                  <h1 style={{ fontSize: '28px', fontWeight: 900, color: '#0F172A', marginTop: '20px', marginBottom: '8px' }}>
+                    {activeHospital?.name || 'Hospital'} Workspace is Locked
+                  </h1>
+
+                  <p style={{ color: '#64748B', fontSize: '15px', lineHeight: 1.6, maxWidth: '560px', margin: '0 auto 28px auto' }}>
+                    {lang === 'hi'
+                      ? `आपके अस्पताल का ${activeHospital?.subscription_plan || 'STARTER'} प्लान ${activeHospital?.plan_expires_at ? new Date(activeHospital.plan_expires_at).toLocaleDateString() : 'समाप्त'} हो चुका है। डॉक्टर शेड्यूलिंग, फ्रंट डेस्क बुकिंग और 24/7 AI वॉइस रिसेप्शन सेवाएं अस्थायी रूप से रोक दी गई हैं।`
+                      : `The ${activeHospital?.subscription_plan || 'STARTER'} subscription plan for this hospital expired on ${activeHospital?.plan_expires_at ? new Date(activeHospital.plan_expires_at).toLocaleDateString() : 'recently'}. Automated AI Voice reception, doctor queues, and patient operations are locked until renewed.`}
+                  </p>
+
+                  <div style={{
+                    background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: '16px',
+                    padding: '18px 24px', display: 'flex', justifyContent: 'space-around',
+                    alignItems: 'center', marginBottom: '32px', textAlign: 'left', flexWrap: 'wrap', gap: '16px'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 700 }}>EXPIRED PLAN</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
+                        {activeHospital?.subscription_plan || 'STARTER'}
+                      </div>
+                    </div>
+                    <div style={{ height: '36px', width: '1.5px', background: '#E2E8F0' }} />
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 700 }}>EXPIRATION DATE</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#DC2626', marginTop: '2px' }}>
+                        {activeHospital?.plan_expires_at ? new Date(activeHospital.plan_expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Expired'}
+                      </div>
+                    </div>
+                    <div style={{ height: '36px', width: '1.5px', background: '#E2E8F0' }} />
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 700 }}>SERVICE STATUS</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#DC2626', marginTop: '2px' }}>
+                        ⛔ Suspended
+                      </div>
+                    </div>
+                  </div>
+
+                  {userRole === 'ADMIN' ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '440px', margin: '0 auto' }}>
+                      <button
+                        onClick={() => handleRazorpayRenewPlan(activeHospital?.id || hospitalId)}
+                        style={{
+                          background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                          color: '#FFFFFF', border: 'none', borderRadius: '14px', padding: '16px 28px',
+                          fontSize: '15px', fontWeight: 800, cursor: 'pointer',
+                          boxShadow: '0 4px 18px rgba(16, 185, 129, 0.35)', transition: 'transform 0.15s',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+                        }}
+                      >
+                        💳 {lang === 'hi' ? 'Razorpay से अभी प्लान रिन्यू करें' : `Renew ${activeHospital?.subscription_plan || 'Plan'} Now via Razorpay`}
+                      </button>
+
+                      <button
+                        onClick={() => setShowUpgradeModal(true)}
+                        style={{
+                          background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+                          color: '#FFFFFF', border: 'none', borderRadius: '14px', padding: '14px 28px',
+                          fontSize: '14px', fontWeight: 800, cursor: 'pointer',
+                          boxShadow: '0 4px 14px rgba(37, 99, 235, 0.25)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+                        }}
+                      >
+                        🚀 {lang === 'hi' ? 'सभी प्लान्स देखें या अपग्रेड करें' : 'View All Plans & Upgrade Tier'}
+                      </button>
+
+                      <button
+                        onClick={logout}
+                        style={{
+                          background: 'transparent', color: '#94A3B8', border: 'none',
+                          padding: '8px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginTop: '8px'
+                        }}
+                      >
+                        ← {lang === 'hi' ? 'लॉगआउट करें' : 'Sign out from workspace'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ maxWidth: '420px', margin: '0 auto' }}>
+                      <div style={{
+                        background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '12px',
+                        padding: '14px', color: '#92400E', fontSize: '13px', fontWeight: 600, marginBottom: '20px'
+                      }}>
+                        ⚠️ {lang === 'hi'
+                          ? 'केवल अस्पताल एडमिनिस्ट्रेटर ही प्लान रिन्यू कर सकते हैं। कृपया अपने एडमिनिस्ट्रेटर से संपर्क करें।'
+                          : 'Only the Hospital Administrator can renew the subscription plan. Please contact your administrator to reactivate services.'}
+                      </div>
+                      <button
+                        onClick={logout}
+                        style={{
+                          background: '#F1F5F9', color: '#334155', border: '1px solid #CBD5E1',
+                          borderRadius: '12px', padding: '12px 28px', fontSize: '14px', fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ← {lang === 'hi' ? 'लॉगआउट करें' : 'Sign Out'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {/* 1. RECEPTIONIST: Live Schedule Tab */}
+                  {activeTab === 'overview' && userRole === 'RECEPTIONIST' && (
                 <div style={{ textAlign: 'left' }}>
                   
                   {/* ── UNIFIED BALAJI HOSPITAL CARD WITH KPI METRICS INSIDE (MATCHING SCREENSHOT 3) ── */}
@@ -4729,6 +4860,8 @@ function App() {
                 </div>
               )}
 
+                </>
+              )}
             </div>
           </div>
         )}

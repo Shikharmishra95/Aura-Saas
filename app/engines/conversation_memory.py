@@ -37,6 +37,8 @@ class SessionContextState(BaseModel):
     patient_name: Optional[str] = None
     patient_phone: Optional[str] = None
     booking_in_progress: bool = False
+    dialog_state: str = "IDLE"  # "IDLE", "BOOKING_COLLECTING_SLOTS", "BOOKING_AWAITING_CONFIRMATION"
+    pending_slots: Dict[str, Any] = Field(default_factory=dict)
     last_appointment_id: Optional[str] = None
     last_tool_used: Optional[str] = None
     last_tool_result: Optional[Dict[str, Any]] = None
@@ -200,7 +202,7 @@ class MultiTenantConversationMemory:
         action_name: str,
         action_args: Dict[str, Any],
         summary: str,
-        expires_in_seconds: int = 120
+        expires_in_seconds: int = 600
     ) -> ActionConfirmationToken:
         """Generates a secure, short-lived action confirmation token for human-in-the-loop approvals."""
         token_id = f"act_{uuid.uuid4().hex[:10]}"

@@ -120,14 +120,23 @@ class HospitalDirectoryIntel:
         norm_text = re.sub(r'[^\w\s]', ' ', clean_text)
         norm_text = re.sub(r'\s+', ' ', norm_text)
 
-        # Guard: If user wants to book an appointment, let the booking flow handle it!
+        # Guard 1: If query is asking for performance, revenue, earnings, bookings analytics, let analytics engine handle it!
+        analytics_metric_kw = [
+            "performance", "revenue", "earning", "earnings", "kamai", "collection",
+            "stats", "statistics", "report", "reports", "matrix", "analysis", "analytics",
+            "booked", "booking performance", "completed", "cancelled", "appointments booked",
+            "appointment booked", "total appointment", "total appointments", "dues", "all time"
+        ]
+        if any(w in norm_text for w in analytics_metric_kw):
+            return None
+
+        # Guard 2: If user wants to book an appointment, let the booking flow handle it!
         booking_kw = [
-            "want book", "want to book", "book for", "book appointment", "appointment book",
+            "want book", "want to book", "book for", "book appointment",
             "slot book", "book slot", "booking karo", "parcha banao", "nayi booking",
             "book kar do", "book kr do", "appointment schedule", "schedule appointment", "ek appointment"
         ]
-        is_analytics = any(w in norm_text for w in ["performance", "report", "stats", "matrix", "analysis", "analytics"])
-        if any(w in norm_text for w in booking_kw) and not is_analytics:
+        if any(w in norm_text for w in booking_kw):
             return None
 
         fee_kw = ["fee", "fees", "charge", "charges", "rupaye", "rupee", "paisa", "paise", "cost", "rate", "daam", "mehnga", "mehngi", "sasta", "sasti", "expensive", "cheap"]
@@ -336,7 +345,9 @@ class HospitalDirectoryIntel:
                 "tool_result": {"doctor": mentioned_doctor}
             }
 
-        if mentioned_doctor:
+        profile_kw = ["profile", "contact", "number", "phone", "detail", "details", "info", "information", "about", "who is", "kaun hai", "kon hai", "baare me", "bare me"]
+        is_metric_or_status = any(w in norm_text for w in ["revenue", "kamai", "earning", "booked", "collection", "performance", "appointment", "duty", "leave", "chutti", "patient"])
+        if mentioned_doctor and (any(w in norm_text for w in profile_kw) or not is_metric_or_status):
             reply = (
                 f"### 🩺 Doctor Profile: {mentioned_doctor['full_name']}\n\n"
                 f"* **Department:** {mentioned_doctor['department']}\n"

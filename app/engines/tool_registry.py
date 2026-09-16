@@ -84,6 +84,18 @@ class DynamicToolRegistry:
         if not meta:
             return False
         role_upper = (user_role or "").upper().replace(" ", "_")
+
+        # Zero-Trust RBAC: SuperAdmin is platform owner, never performs receptionist OPD patient bookings or doctor personal consultations
+        DISALLOWED_FOR_SUPER_ADMIN = {
+            "book_appointment", "reschedule_appointment", "cancel_appointment", 
+            "get_available_slots", "check_in_patient", "get_my_appointments",
+            "get_my_prescriptions", "get_my_live_token_position", "save_consultation_notes",
+            "generate_appointment_payment_link", "get_doctor_live_queue", "admit_ipd_patient",
+            "discharge_ipd_patient", "dispense_pharmacy_bill"
+        }
+        if role_upper in ["SUPER_ADMIN", "SUPERADMIN"] and meta.tool_name in DISALLOWED_FOR_SUPER_ADMIN:
+            return False
+
         role_allowed = ("ALL" in meta.required_roles) or (role_upper in meta.required_roles)
         if not role_allowed:
             return False
@@ -107,10 +119,21 @@ class DynamicToolRegistry:
         """
         role_upper = (user_role or "").upper().replace(" ", "_")
         perms_set = set(user_permissions or [])
+        DISALLOWED_FOR_SUPER_ADMIN = {
+            "book_appointment", "reschedule_appointment", "cancel_appointment", 
+            "get_available_slots", "check_in_patient", "get_my_appointments",
+            "get_my_prescriptions", "get_my_live_token_position", "save_consultation_notes",
+            "generate_appointment_payment_link", "get_doctor_live_queue", "admit_ipd_patient",
+            "discharge_ipd_patient", "dispense_pharmacy_bill"
+        }
 
         # Step 1: Zero-Trust RBAC Filter
         permitted_tools: List[ToolMetadata] = []
         for meta in self._tools.values():
+            # Zero-Trust RBAC: SuperAdmin is platform owner, never performs receptionist OPD patient bookings
+            if role_upper in ["SUPER_ADMIN", "SUPERADMIN"] and meta.tool_name in DISALLOWED_FOR_SUPER_ADMIN:
+                continue
+
             role_allowed = ("ALL" in meta.required_roles) or (role_upper in meta.required_roles)
             if not role_allowed:
                 continue
@@ -563,6 +586,41 @@ class DynamicToolRegistry:
             ),
             handler=lambda args, context, db: CopilotTools.get_queue_statistics(
                 hospital_id=context.get("hospital_id"),
+                date_str=args.get("date_str"),
+                db=db
+            )
+        )
+
+        # 11b. get_appointment_status_summary (Staff / Admin / Doctor / SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="get_appointment_status_summary",
+                domain="appointments",
+                description="Get aggregated counts and details of appointments by status (cancelled, missed, completed, scheduled) with optional doctor and date range filters.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "doctor_name": {"type": "STRING", "description": "Doctor's name (e.g. Dr. Vivek, Dr. Nitin) to filter by"},
+                        "status": {"type": "STRING", "description": "Appointment status: 'CANCELLED', 'MISSED', 'COMPLETED', 'CONFIRMED', or 'ALL'"},
+                        "time_range": {"type": "STRING", "description": "'today', 'yesterday', 'this_week', 'this_month', or 'all'"},
+                        "date_str": {"type": "STRING", "description": "Specific date in YYYY-MM-DD format"}
+                    }
+                },
+                intent_examples=[
+                    "how many appointments were cancelled today", "cancelled appointments today",
+                    "missed bookings today", "de vivek total missed bookings and total complete bookings",
+                    "dr vivek missed appointments", "how many completed appointments today",
+                    "total completed visits this month", "show cancelled appointments",
+                    "how many patients missed their visit"
+                ],
+                required_roles=["RECEPTIONIST", "ADMIN", "SUPER_ADMIN", "DOCTOR"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_appointment_status_summary(
+                hospital_id=context.get("hospital_id"),
+                doctor_name=args.get("doctor_name"),
+                status=args.get("status"),
+                time_range=args.get("time_range", "today"),
                 date_str=args.get("date_str"),
                 db=db
             )
@@ -1054,6 +1112,33 @@ class DynamicToolRegistry:
             )
         )
 
+        # 29. search_platform_hospital (SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="search_platform_hospital",
+                domain="control_tower",
+                description="Search and view details of any tenant hospital across the platform (phone, email, doctors, plan, status).",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "query": {"type": "STRING", "description": "Hospital name, slug, ID or city to search"}
+                    },
+                    "required": ["query"]
+                },
+                intent_examples=[
+                    "balaji hospital ka number do", "hospital phone number", "search hospital",
+                    "find hospital contact", "hospital ki details do", "hospital details",
+                    "balaji hospital info", "tenant details", "look up hospital"
+                ],
+                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: ControlTowerTools.search_platform_hospital(
+                query=args.get("query", ""),
+                db=db
+            )
+        )
+
         # 30. apply_leave_for_doctor (Doctor)
         self.register(
             ToolMetadata(
@@ -1154,7 +1239,7 @@ class DynamicToolRegistry:
                 intent_examples=[
                     "all time pending collection dues", "total revenue of all time", "pending dues summary", "revenue today"
                 ],
-                required_roles=["ADMIN", "SUPER_ADMIN", "ALL"],
+                required_roles=["ADMIN", "SUPER_ADMIN", "SUPERADMIN"],
                 risk_level="READ_ONLY"
             ),
             handler=lambda args, context, db: CopilotTools.get_revenue_and_dues(
@@ -1181,7 +1266,7 @@ class DynamicToolRegistry:
                 intent_examples=[
                     "my total appointment and total earning of all time", "today's consulted patients", "my earnings", "opd earnings today"
                 ],
-                required_roles=["DOCTOR", "ADMIN", "SUPER_ADMIN", "ALL"],
+                required_roles=["DOCTOR", "ADMIN", "SUPER_ADMIN", "SUPERADMIN"],
                 risk_level="READ_ONLY"
             ),
             handler=lambda args, context, db: CopilotTools.get_doctor_daily_earnings(
@@ -1296,6 +1381,88 @@ class DynamicToolRegistry:
             handler=lambda args, context, db: {
                 "templates": analytics_query_builder.get_available_templates(context.get("role", ""))
             }
+        )
+
+        # 38. search_platform_hospital (SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="search_platform_hospital",
+                domain="control_tower",
+                description="Global platform hospital lookup for SuperAdmin across all tenant hospitals (contact details, phone, address, plan, doctor count).",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "query": {"type": "STRING", "description": "Hospital name, slug, id, or location to search"}
+                    },
+                    "required": ["query"]
+                },
+                intent_examples=[
+                    "balaji hospital ka number do mujhe", "search hospital alpha-medical", "hospital contact info", "hospital details", "balaji hospital info"
+                ],
+                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: ControlTowerTools.search_platform_hospital(
+                query=args.get("query", ""),
+                db=db
+            )
+        )
+
+        # 39. get_doctor_metrics
+        self.register(
+            ToolMetadata(
+                tool_name="get_doctor_metrics",
+                domain="doctor",
+                description="Fetches live doctor-specific metrics including total revenue collected, total appointments booked, completed visits, and cancellations.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "doctor_name": {"type": "STRING", "description": "Doctor name e.g. 'Dr. Nitin Dewedi'"},
+                        "metric": {"type": "STRING", "description": "'revenue', 'bookings', 'completed', or 'all'"},
+                        "time_range": {"type": "STRING", "description": "'today', 'this_week', 'this_month', or 'all'"}
+                    },
+                    "required": ["doctor_name"]
+                },
+                intent_examples=[
+                    "dr nitin total revenue", "dr vivek kamai kitni hui", "how much did dr shiva earn",
+                    "dr nitin appointments count", "doctor revenue", "doctor total collections"
+                ],
+                required_roles=["ADMIN", "HOSPITAL_ADMIN", "SUPER_ADMIN", "DOCTOR", "RECEPTIONIST"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_doctor_metrics(
+                hospital_id=context.get("hospital_id"),
+                doctor_name=args.get("doctor_name", ""),
+                metric=args.get("metric", "all"),
+                time_range=args.get("time_range", "all"),
+                db=db
+            )
+        )
+
+        # 40. get_all_doctors_performance
+        self.register(
+            ToolMetadata(
+                tool_name="get_all_doctors_performance",
+                domain="doctor",
+                description="Live performance leaderboard of all doctors in the hospital showing total bookings, completed consultations, cancellations, and revenue generated.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "time_range": {"type": "STRING", "description": "'today', 'this_week', 'this_month', or 'all'"}
+                    }
+                },
+                intent_examples=[
+                    "show doctor-wise booking performance", "doctor performance", "doctor booking stats",
+                    "doctor wise load", "which doctor has highest bookings", "doctor ranking"
+                ],
+                required_roles=["ADMIN", "HOSPITAL_ADMIN", "SUPER_ADMIN", "DOCTOR", "RECEPTIONIST"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_all_doctors_performance(
+                hospital_id=context.get("hospital_id"),
+                time_range=args.get("time_range", "all"),
+                db=db
+            )
         )
 
 
