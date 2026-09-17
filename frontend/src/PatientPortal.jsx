@@ -604,11 +604,10 @@ export default function PatientPortal({ slug, lang = 'en' }) {
               <form onSubmit={requestOTP} className="p-form">
                 <div className="p-input-group">
                   <label>{t('phone')}</label>
-                  <input type="tel" required value={phone} onChange={e => setPhone(e.target.value)} placeholder="e.g. 9532399202" />
+                  <input type="tel" required value={phone} onChange={e => setPhone(e.target.value)} placeholder="Enter your 10-digit mobile number" />
                 </div>
                 {authError && <div className="p-error-text">{authError}</div>}
                 <button type="submit" className="p-btn p-btn-primary">{t('sendOtp')}</button>
-                <div className="p-note">For demo MVP, use any registered phone and OTP: 1234</div>
               </form>
             )}
 
@@ -628,7 +627,7 @@ export default function PatientPortal({ slug, lang = 'en' }) {
                 )}
                 <div className="p-input-group">
                   <label>Enter OTP sent to {phone}</label>
-                  <input type="text" required value={otp} onChange={e => setOtp(e.target.value)} placeholder="1234" />
+                  <input type="text" required value={otp} onChange={e => setOtp(e.target.value)} placeholder="Enter OTP" />
                 </div>
                 {authError && <div className="p-error-text">{authError}</div>}
                 <button type="submit" className="p-btn p-btn-primary">{t('verifyOtp')}</button>

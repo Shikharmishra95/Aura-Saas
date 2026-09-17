@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel
@@ -14,6 +14,37 @@ from app.core.logging import logger
 
 router = APIRouter()
 
+# ─── Simple In-Memory OTP Rate Limiter ─────────────────────────────────────
+# Tracks: { phone_number: [timestamp1, timestamp2, ...] }
+# Allows max 3 OTP requests per phone per 10 minutes
+_otp_request_tracker: dict = {}
+OTP_MAX_REQUESTS = 3
+OTP_WINDOW_MINUTES = 10
+
+def _check_otp_rate_limit(phone: str):
+    """Raises HTTP 429 if phone has exceeded OTP request limit in the time window."""
+    now = datetime.utcnow()
+    window_start = now - timedelta(minutes=OTP_WINDOW_MINUTES)
+    
+    # Clean old entries outside the window
+    if phone in _otp_request_tracker:
+        _otp_request_tracker[phone] = [
+            ts for ts in _otp_request_tracker[phone] if ts > window_start
+        ]
+    
+    request_count = len(_otp_request_tracker.get(phone, []))
+    if request_count >= OTP_MAX_REQUESTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many OTP requests. Please wait {OTP_WINDOW_MINUTES} minutes before trying again."
+        )
+    
+    # Record this request
+    if phone not in _otp_request_tracker:
+        _otp_request_tracker[phone] = []
+    _otp_request_tracker[phone].append(now)
+# ───────────────────────────────────────────────────────────────────────────
+
 class SendOTPRequest(BaseModel):
     hospital_id: str
     phone: str
@@ -28,9 +59,13 @@ class VerifyOTPRequest(BaseModel):
 @router.post("/send-otp")
 async def send_otp(request: SendOTPRequest, db: AsyncSession = Depends(get_db)):
     """
-    Simulates sending an OTP to the patient's phone.
+    Sends an OTP to the patient's phone for login.
     If the patient does not exist, registers them temporarily.
+    Rate limited: max 3 requests per phone per 10 minutes.
     """
+    # Rate limit check — must be first before any DB work
+    _check_otp_rate_limit(request.phone)
+
     # Check if hospital subscription is active
     hosp = await db.get(Hospital, request.hospital_id)
     if hosp and (hosp.plan_status == "EXPIRED" or (hosp.plan_expires_at and hosp.plan_expires_at < datetime.utcnow())):

@@ -25,13 +25,29 @@ from app.services.whatsapp import WhatsAppNotificationService
 
 router = APIRouter(tags=["appointments"])
 
+# ─── Missed Appointment Sweeper Throttle ───────────────────────────────────
+# Prevents expensive full-table scan from running on every API request.
+# Sweeper runs at most once per hour per server process.
+_last_sweep_run: Optional[datetime] = None
+SWEEP_INTERVAL_SECONDS = 3600  # 1 hour
+# ───────────────────────────────────────────────────────────────────────────
+
 
 async def auto_update_missed_appointments(db: AsyncSession):
     """
-    Sweeper that auto-marks expired appointments as MISSED and dispatches WhatsApp notifications:
-    - Any appointment (Paid or Unpaid) whose appointment_datetime has passed and is not COMPLETED/CANCELLED/MISSED is marked MISSED.
+    Sweeper that auto-marks expired appointments as MISSED and dispatches WhatsApp notifications.
+    Throttled: runs at most once per hour to avoid full-table scan on every request.
+    - Any appointment whose appointment_datetime has passed is marked MISSED.
     - Sends WhatsApp missed notification for each newly marked missed appointment.
     """
+    global _last_sweep_run
+    now = datetime.now()
+
+    # Skip if sweeper ran recently (within last hour)
+    if _last_sweep_run and (now - _last_sweep_run).total_seconds() < SWEEP_INTERVAL_SECONDS:
+        return
+    _last_sweep_run = now
+
     try:
         now = datetime.now()
         start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)

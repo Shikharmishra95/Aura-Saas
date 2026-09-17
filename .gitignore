@@ -37,3 +37,16 @@ build/
 node_modules/
 frontend/dist/
 frontend/node_modules/
+
+# AURA — Dev/Test scripts (do not push)
+smoke_test.py
+test_login_api.py
+test_slot_full.py
+verify_db.py
+cleanup_ghost_hospital.py
+create_copilot_tables.py
+roles.txt
+scratch/
+
+# AURA — Generated cache (rebuilt automatically on server start)
+app/engines/rag_embeddings_cache.json

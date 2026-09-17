@@ -23,6 +23,31 @@ from app.core.config import settings
 router = APIRouter()
 twilio_service = TwilioService()
 
+# ─── Voice Call Deduplication ───────────────────────────────────────────────
+# Prevents double-processing if Twilio retries the same webhook.
+# Stores processed CallSids with timestamp for 5-minute window.
+_processed_call_sids: dict = {}
+_CALL_SID_TTL_SECONDS = 300  # 5 minutes
+
+def _is_duplicate_call_sid(call_sid: str) -> bool:
+    """Returns True if this CallSid was already processed within the last 5 minutes."""
+    now = datetime.now(timezone.utc)
+    # Evict expired entries
+    expired_keys = [
+        k for k, ts in _processed_call_sids.items()
+        if (now - ts).total_seconds() > _CALL_SID_TTL_SECONDS
+    ]
+    for k in expired_keys:
+        del _processed_call_sids[k]
+
+    if call_sid in _processed_call_sids:
+        twilio_logger.warning(f"Duplicate CallSid detected and ignored: {call_sid}")
+        return True
+
+    _processed_call_sids[call_sid] = now
+    return False
+# ────────────────────────────────────────────────────────────────────────────
+
 @router.post("/inbound")
 async def handle_inbound_call(
     From: str = Form(...),
@@ -34,7 +59,13 @@ async def handle_inbound_call(
 ):
     """Twilio incoming voice webhook endpoint. Initiates logs, creates session, and returns streaming TwiML response."""
     twilio_logger.info(f"Incoming call webhook received from caller: {From} to line: {To} (target hospital: {hospital_id})")
-    
+
+    # Guard: Reject duplicate webhook retries from Twilio
+    if _is_duplicate_call_sid(CallSid):
+        twilio_logger.info(f"Duplicate webhook ignored for CallSid: {CallSid}")
+        from app.services.twilio_service import TwilioService as TS
+        return Response(content="<Response></Response>", media_type="text/xml")
+
     try:
         hospital = None
         if hospital_id:

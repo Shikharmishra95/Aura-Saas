@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 Hours
 
+    def model_post_init(self, __context: any) -> None:
+        """Validate critical security settings after model initialization."""
+        if self.JWT_SECRET_KEY == "SECRET_MUST_BE_REPLACED_IN_PRODUCTION_ENV_FILE":
+            raise RuntimeError(
+                "FATAL: JWT_SECRET_KEY is still the default placeholder. "
+                "Set a strong random key in your .env file. "
+                "Generate one: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+
     # Gemini LLM API Configurations
     GEMINI_API_KEY: str
     GEMINI_MODEL: str = "gemini-1.5-flash-latest"

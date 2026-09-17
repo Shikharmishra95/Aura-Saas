@@ -30,9 +30,6 @@ class LogContextMiddleware(BaseHTTPMiddleware):
                     hosp_id = p
                     break
         
-        if not hosp_id and "balaji" in request.url.path.lower():
-            hosp_id = "HOSP-BALA-7282"
-            
         hospital_id_token = hospital_id_context.set(hosp_id)
         
         try:

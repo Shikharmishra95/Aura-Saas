@@ -1,3 +1,34 @@
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
+import logging
+
+# ─── Sentry Error Monitoring — AURA Backend ────────────────────────────────
+# Captures ALL unhandled exceptions, slow DB queries, API performance traces.
+# send_default_pii=False → Patient names, phones, OTPs are NEVER sent to Sentry .
+# Docs: https://docs.sentry.io/platforms/python/integrations/fastapi/
+sentry_sdk.init(
+    dsn="https://9c7474e970f0c976378ab5f0a547eb9b@o4512101179260928.ingest.us.sentry.io/4512101226446848",
+    environment="production",        # Change to "development" locally
+    release="aura-saas@1.0.0",      # Update version on each deploy
+    send_default_pii=False,          # CRITICAL: Never send patient PII to Sentry
+    enable_logs=True,                # Capture Python logger.error() calls too
+    traces_sample_rate=0.2,          # Track 20% of requests for performance (free tier safe)
+    profiles_sample_rate=0.1,        # Profile 10% of transactions
+    integrations=[
+        FastApiIntegration(
+            transaction_style="endpoint",  # Groups traces by endpoint name
+        ),
+        SqlalchemyIntegration(),     # Captures slow/failed DB queries automatically
+        LoggingIntegration(
+            level=logging.ERROR,     # Send logger.error() and above to Sentry
+            event_level=logging.ERROR,
+        ),
+    ],
+)
+# ────────────────────────────────────────────────────────────────────────────
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -45,18 +76,38 @@ def create_app() -> FastAPI:
     # 4. Root Health Check Endpoint
     @app.get("/health", tags=["system"])
     async def health_check(db = Depends(get_db)):
-        """Basic service status check API with database ping."""
+        """Service status check — verifies database connectivity and AI service availability."""
         from sqlalchemy import text
+
+        # 1. Database ping
         db_status = "healthy"
         try:
             await db.execute(text("SELECT 1"))
         except Exception as e:
             logger.error(f"Database health check failed: {str(e)}")
             db_status = f"unhealthy: {str(e)}"
-            
+
+        # 2. Groq AI ping (lightweight — 1 token check)
+        groq_status = "not_configured"
+        try:
+            from app.engines.groq_client import GroqClient
+            if GroqClient.is_configured():
+                result = await GroqClient.chat_completion(
+                    system_instruction="ping",
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1
+                )
+                groq_status = "healthy" if result is not None else "degraded"
+        except Exception as e:
+            logger.warning(f"Groq health check failed: {str(e)}")
+            groq_status = "degraded"
+
+        overall = "healthy" if db_status == "healthy" else "degraded"
+
         return {
-            "status": "healthy" if db_status == "healthy" else "degraded",
+            "status": overall,
             "database": db_status,
+            "groq_ai": groq_status,
             "environment": settings.ENV,
             "project": settings.PROJECT_NAME
         }
