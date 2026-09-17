@@ -62,12 +62,18 @@ async def get_hospital_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
     dept_stmt = select(Department).where(Department.hospital_id == hospital.id, Department.is_active == True)
     departments = (await db.execute(dept_stmt)).scalars().all()
     
+    is_expired = False
+    if hospital.plan_status == "EXPIRED" or (hospital.plan_expires_at and hospital.plan_expires_at < datetime.utcnow()):
+        is_expired = True
+
     return {
         "id": hospital.id,
         "name": hospital.name,
         "slug": hospital.slug,
         "address": hospital.address,
         "phone": hospital.phone,
+        "is_expired": is_expired,
+        "subscription_status": "EXPIRED" if is_expired else "ACTIVE",
         "departments": [{"id": d.id, "name": d.name} for d in departments]
     }
 

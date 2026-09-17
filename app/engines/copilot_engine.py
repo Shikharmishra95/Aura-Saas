@@ -1023,7 +1023,8 @@ class CopilotEngine:
                     role=role,
                     tool_used=offline_res.get("tool_used"),
                     query=user_message,
-                    reply=offline_res.get("reply", "")
+                    reply=offline_res.get("reply", ""),
+                    is_expired=bool(actor_profile and actor_profile.get("is_subscription_expired"))
                 )
             return offline_res
 
@@ -1034,60 +1035,30 @@ class CopilotEngine:
             hospital_id=hospital_id
         )
 
-        # 4. Handle UNKNOWN Route - Try generic fallback with Actionable Suggestions
+        # 4. Handle UNKNOWN Route:
+        # When rigid regexes don't match (typos like 'what the reaosn of patinets', conversational 'okay', 'what', follow-ups):
+        # DO NOT abort with robotic error! Hand it over to the ReAct LLM Engine (Groq / Gemini) with role-authorized tools.
+        # The LLM will use its intelligence, read conversation history, execute tools if required, or answer naturally.
         if decision.route == RouteType.UNKNOWN:
-            reply = decision.suggested_reply or intent_router._generate_safe_fallback(role)
-            role_up = (role or "STAFF").upper()
-            if role_up in ["SUPER_ADMIN", "SUPERADMIN"]:
-                unknown_suggestions = [
-                    "Platform monthly revenue overview",
-                    "How many hospitals are active on AURA platform?",
-                    "Which subscriptions are expiring in next 30 days?",
-                    "Total AI voice calls processed today"
-                ]
-            elif role_up in ["ADMIN", "HOSPITAL_ADMIN"]:
-                unknown_suggestions = [
-                    "How many appointments were cancelled today?",
-                    "What is our total OPD revenue for this month?",
-                    "Show doctor-wise booking performance",
-                    "Which doctors are on duty today?"
-                ]
-            elif role_up == "DOCTOR":
-                unknown_suggestions = [
-                    "How many patients are waiting in my queue?",
-                    "What are my shift timings for tomorrow?",
-                    "Today's total consulted patients",
-                    "What are my OPD earnings today?"
-                ]
-            elif role_up == "PATIENT":
-                unknown_suggestions = [
-                    "I want to book an appointment",
-                    "Which doctors are available today?",
-                    "What are the doctor consultation fees?",
-                    "Check my live token position"
-                ]
-            else:
-                unknown_suggestions = [
-                    "Show live OPD queue summary",
-                    "Check daily cash register",
-                    "Which doctors are available today?",
-                    "How many appointments were cancelled today?"
-                ]
-            return {
-                "reply": reply,
-                "route": decision.route.value,
-                "suggestions": unknown_suggestions
-            }
+            candidate_tools = decision.pruned_tools or tool_registry.prune_tools_for_user(query=user_message, user_role=role, top_k=30)
+            decision = RouterDecision(
+                route=RouteType.LIVE_DATA,
+                confidence=0.60,
+                knowledge_results=[],
+                pruned_tools=candidate_tools
+            )
 
-        # 4. Handle Pure KNOWLEDGE Route (Instant Sub-200ms RAG response)
+        # 4. Handle Pure KNOWLEDGE Route (Groq synthesizes natural conversational answers, offline falls back to raw RAG text)
         if decision.route == RouteType.KNOWLEDGE and decision.knowledge_results:
-            top_hit = decision.knowledge_results[0]
-            reply = f"### 📖 {top_hit['title']}\n\n{top_hit['content']}\n\n> 📚 *Source: {top_hit.get('source', 'Hospital Knowledge Base')}*"
-            return {
-                "reply": reply,
-                "route": decision.route.value,
-                "citations": [k["title"] for k in decision.knowledge_results]
-            }
+            if not GroqClient.is_configured():
+                top_hit = decision.knowledge_results[0]
+                reply = f"### 📖 {top_hit['title']}\n\n{top_hit['content']}\n\n> 📚 *Source: {top_hit.get('source', 'Hospital Knowledge Base')}*"
+                return {
+                    "reply": reply,
+                    "route": decision.route.value,
+                    "citations": [k["title"] for k in decision.knowledge_results]
+                }
+            # When Groq is online, fall through so Groq synthesizes a conversational, ChatGPT-like answer using rag_context_block!
 
         # 5. Compile Live Dynamic System Prompt & Pruned Tool Spec
         today_obj = datetime.now()
@@ -1195,6 +1166,19 @@ PLATFORM OWNER (SUPER ADMIN) CONTROL TOWER & FLEET DIRECTIVES:
             except Exception as sa_e:
                 logger.debug(f"Super admin live block snapshot error: {sa_e}")
 
+        # Expired Hospital Subscription Mode Directive
+        expired_consulting_block = ""
+        is_expired_hospital = bool(actor_profile and actor_profile.get("is_subscription_expired"))
+        if is_expired_hospital:
+            expired_consulting_block = f"""
+EXPIRED HOSPITAL SUBSCRIPTION MODE DIRECTIVE:
+- The authenticated hospital ({hospital_name}) has an EXPIRED subscription (Plan: '{actor_profile.get('subscription_plan', 'STARTER')}', Expired: '{actor_profile.get('plan_expires_at')}').
+- STRICT SECURITY DIRECTIVE: DO NOT execute tools or disclose internal live hospital data (OPD queues, doctor rosters, patient EMR, or revenue).
+- ROLE & PERSONA: You are the official AURA SaaS Product & Sales Consultant (ChatGPT-style consultation).
+- Your mission is to assist the hospital admin in understanding AURA subscription plans (Starter ₹1,500/mo, Pro AI ₹2,999/mo, Enterprise 360 ₹29,999/yr), comparing tiers, explaining 24/7 AI Voice phone calling capabilities, and actively recommending the best plan for their hospital size and doctor count based on the retrieved knowledge base.
+- Guide them politely to click the 'Renew Now via Razorpay' button directly on their workspace screen for instant reactivation.
+"""
+
         hosp_display = 'AURA Platform Control Tower' if role_upper in ['SUPER_ADMIN', 'SUPERADMIN'] else hospital_name
         system_instruction = f"""You are AURA AI Copilot, the official enterprise intelligent healthcare assistant for {hosp_display}.
 Current Authenticated Context:
@@ -1212,6 +1196,7 @@ Current Authenticated Context:
 {hospital_directory}
 {admin_live_block}
 {super_admin_live_block}
+{expired_consulting_block}
 
 STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
 1. ZERO HALLUCINATION: NEVER invent, guess, or fabricate appointment IDs (apt_...), doctor IDs, patient medical records, slot timings, prices (₹), queue numbers, or financial metrics.
@@ -1223,8 +1208,8 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
 7. LANGUAGE: Mirror user language (English, Hindi, or polite Hinglish).
 """
 
-        # Pruned Tools passed to LLM
-        tools_spec = decision.pruned_tools
+        # Pruned Tools passed to LLM (Disabled when hospital subscription is expired to ensure pure consultation)
+        tools_spec = [] if is_expired_hospital else decision.pruned_tools
 
         contents = []
         for msg in chat_history[-10:]:
@@ -1413,13 +1398,25 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     role=role,
                     tool_used=offline_res.get("tool_used"),
                     query=user_message,
-                    reply=offline_res.get("reply", "")
+                    reply=offline_res.get("reply", ""),
+                    is_expired=bool(actor_profile and actor_profile.get("is_subscription_expired"))
                 )
             return offline_res
 
         # Contextual, Enterprise-Grade Smart Fallback with Actionable Suggestions
         role_upper = (role or "STAFF").upper()
-        if role_upper in ["SUPER_ADMIN", "SUPERADMIN"]:
+        if is_expired_hospital and role_upper not in ["SUPER_ADMIN", "SUPERADMIN"]:
+            fallback_reply = (
+                f"Your hospital workspace is currently suspended due to an expired subscription plan. "
+                f"As your AURA SaaS Consultant, I can help you compare plans or guide you through instant Razorpay renewal:"
+            )
+            fallback_suggestions = [
+                "Compare Starter, Pro AI, and Enterprise subscription plans",
+                "Which AURA subscription plan is best for our hospital?",
+                "What features are included in the Pro AI Voice plan?",
+                "How can I renew our hospital subscription plan via Razorpay?"
+            ]
+        elif role_upper in ["SUPER_ADMIN", "SUPERADMIN"]:
             fallback_reply = (
                 f"I couldn't locate specific platform metrics matching *\"{user_message}\"*. "
                 f"As **Platform SuperAdmin**, you have direct access to global multi-tenant telemetry. "
@@ -1485,11 +1482,59 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
         }
 
     @classmethod
-    def _build_contextual_suggestions(cls, role: str, tool_used: Optional[str], query: str, reply: str) -> List[str]:
+    def _build_contextual_suggestions(
+        cls,
+        role: str,
+        tool_used: Optional[str],
+        query: str,
+        reply: str,
+        is_expired: bool = False
+    ) -> List[str]:
         """Generates 3-4 smart, highly relevant next-step query pills strictly related to the answered topic."""
         role_up = (role or "STAFF").upper()
         q = (query or "").lower()
         t = (tool_used or "").lower()
+        r = (reply or "").lower()
+
+        # 0. Expired hospital or Subscription / Plan consultation intent (All roles except SuperAdmin)
+        is_sub_query = any(w in q for w in ["plan", "subscri", "starter", "pro", "enterprise", "renew", "upgrade", "pricing", "cost", "price", "paywall", "razorpay", "voice call", "trial"])
+        is_sub_reply = any(w in r for w in ["starter plan", "pro ai plan", "enterprise 360", "renew now", "razorpay", "subscription plan", "workspace is locked", "workspace is suspended", "subscription is suspended"])
+
+        if (is_expired or is_sub_query or is_sub_reply) and role_up not in ["SUPER_ADMIN", "SUPERADMIN"]:
+            if "voice" in q or "call" in q:
+                return [
+                    "Compare Starter, Pro AI, and Enterprise subscription plans",
+                    "Which AURA subscription plan is best for our hospital?",
+                    "How can I renew our hospital subscription plan via Razorpay?",
+                    "What are the doctor limits for Pro AI vs Starter?"
+                ]
+            if "starter" in q:
+                return [
+                    "Compare Starter vs Pro AI plan features",
+                    "How does 24/7 AI Voice Phone Receptionist work?",
+                    "Which AURA subscription plan is best for our hospital?",
+                    "How can I renew our hospital subscription plan via Razorpay?"
+                ]
+            if "pro" in q:
+                return [
+                    "What features are included in the Pro AI Voice plan?",
+                    "Compare Pro AI and Enterprise 360 plans",
+                    "How can I renew our hospital subscription plan via Razorpay?",
+                    "Which AURA subscription plan is best for our hospital?"
+                ]
+            if "enterprise" in q:
+                return [
+                    "Compare Pro AI and Enterprise 360 plans",
+                    "What features are included in the Pro AI Voice plan?",
+                    "How can I renew our hospital subscription plan via Razorpay?",
+                    "Which AURA subscription plan is best for our hospital?"
+                ]
+            return [
+                "Compare Starter, Pro AI, and Enterprise subscription plans",
+                "Which AURA subscription plan is best for our hospital?",
+                "What features are included in the Pro AI Voice plan?",
+                "How can I renew our hospital subscription plan via Razorpay?"
+            ]
 
         if role_up in ["SUPER_ADMIN", "SUPERADMIN"]:
             if "voice" in q or "call" in q or "telemetry" in t:
@@ -1805,6 +1850,10 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
         norm_msg = entity_extractor.normalize_text(user_message)
         msg_lower = norm_msg.lower().strip()
         role_upper = (role or "").upper().replace(" ", "_")
+
+        # Expired Hospital Bypass: Let Groq LLM & RAG handle natural language subscription consultation
+        if actor_profile and actor_profile.get("is_subscription_expired"):
+            return None
         
         # 1. Date extraction
         target_date = (context_state.selected_date if context_state and context_state.selected_date else None) or datetime.now().strftime("%Y-%m-%d")
@@ -2178,9 +2227,12 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             res = await CopilotTools.get_comprehensive_doctor_analytics(hospital_id=hospital_id or "", time_range="all", db=db)
             return {"reply": cls._format_markdown_fallback("get_comprehensive_doctor_analytics", res), "tool_used": "get_comprehensive_doctor_analytics", "tool_result": res}
 
-        # 1E. Hospital Admin Subscription & License Validity Matcher (Tenant Admin)
-        if role_upper not in ["SUPER_ADMIN", "SUPERADMIN"] and any(w in msg_lower for w in ["subscription validity", "subscription expiry", "subscription plan", "plan validity", "license validity", "plan status", "days remaining in subscription", "plan expire", "subscription"]):
-            res = await CopilotTools.get_hospital_subscription_info(hospital_id=hospital_id or "", db=db)
+        # 1E. Hospital Admin Subscription & License Validity Matcher (Tenant Admin checking their own expiry)
+        if hospital_id and role_upper not in ["SUPER_ADMIN", "SUPERADMIN"] and any(w in msg_lower for w in [
+            "subscription validity", "subscription expiry", "plan validity", "license validity", 
+            "plan status", "days remaining", "kab expire", "expiry date", "plan kab khatam", "when does plan expire"
+        ]):
+            res = await CopilotTools.get_hospital_subscription_info(hospital_id=hospital_id, db=db)
             return {"reply": cls._format_markdown_fallback("get_hospital_subscription_info", res), "tool_used": "get_hospital_subscription_info", "tool_result": res}
 
         # 2. SuperAdmin Platform Control Tower & Subscriptions

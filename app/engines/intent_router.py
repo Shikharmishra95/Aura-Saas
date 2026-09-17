@@ -86,12 +86,13 @@ class CopilotIntentRouter:
         r'\b(policy|rules|refund|cancellation charge|tpa|insurance|cashless|tie up|tieup|claim)\b',
         r'\b(visiting hours|visiting time|pass|attendant pass|icu timing|ward timing|visiting rule)\b',
         r'\b(opd timing|general timing|hospital hours|sunday opd|emergency 24x7|casualty timing)\b',
-        r'\b(sop|guidelines|triaging|triage protocol|superadmin tier|pricing tier|starter tier|growth tier|enterprise tier)\b'
+        r'\b(sop|guidelines|triaging|triage protocol|superadmin tier|pricing tier|starter tier|growth tier|enterprise tier)\b',
+        r'\b(subscription|subscriptions|saas plans?|pricing|price list|starter plan|pro plan|enterprise plan|pro ai|plans comparison|which plan|best plan|kaunsa plan|konsa plan|renew|renewal|upgrade plan|plan lena chahiye)\b'
     ]
 
     # Strong Healthcare Domain Anchor Tokens
     HEALTHCARE_DOMAIN_PATTERNS = [
-        r'\b(hospital|doctor|dr|patient|opd|token|appointment|slot|nurse|bed|icu|casualty|medicine|rx|prescription|fee|charge|bill|revenue|queue|leave|duty|roster|symptom|fever|cough|pain|khansi|bukhar|dawai|parcha|department|departments|working days)\b'
+        r'\b(hospital|doctor|dr|patient|opd|token|appointment|slot|nurse|bed|icu|casualty|medicine|rx|prescription|fee|charge|bill|revenue|queue|leave|duty|roster|symptom|fever|cough|pain|khansi|bukhar|dawai|parcha|department|departments|working days|subscription|plan|plans|pricing|upgrade|renew)\b'
     ]
 
     @classmethod

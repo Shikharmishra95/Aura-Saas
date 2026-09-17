@@ -8,7 +8,7 @@ import random
 import uuid
 
 from app.database.session import get_db
-from app.database.models.appointment import Patient
+from app.database.models.appointment import Patient, Hospital
 from app.core.dependencies import create_access_token
 from app.core.logging import logger
 
@@ -31,6 +31,14 @@ async def send_otp(request: SendOTPRequest, db: AsyncSession = Depends(get_db)):
     Simulates sending an OTP to the patient's phone.
     If the patient does not exist, registers them temporarily.
     """
+    # Check if hospital subscription is active
+    hosp = await db.get(Hospital, request.hospital_id)
+    if hosp and (hosp.plan_status == "EXPIRED" or (hosp.plan_expires_at and hosp.plan_expires_at < datetime.utcnow())):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Hospital online patient services are currently suspended due to plan expiration. Please contact the hospital front desk directly."
+        )
+
     stmt = select(Patient).where(Patient.phone == request.phone, Patient.hospital_id == request.hospital_id).order_by(Patient.created_at.asc())
     patient = (await db.execute(stmt)).scalars().first()
     

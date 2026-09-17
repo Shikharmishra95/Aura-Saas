@@ -575,7 +575,27 @@ export default function PatientPortal({ slug, lang = 'en' }) {
       </header>
 
       <main className="p-main">
-        {!token ? (
+        {hospital?.is_expired || hospital?.subscription_status === 'EXPIRED' ? (
+          <div className="p-auth-container" style={{ textAlign: 'center', padding: '48px 24px', background: '#FFFFFF', borderRadius: '24px', boxShadow: '0 20px 40px -15px rgba(15,23,42,0.1)', border: '1.5px solid #FEE2E2', maxWidth: '520px', margin: '40px auto' }}>
+            <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: '#FEF2F2', border: '1px solid #FECACA', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', fontSize: '28px' }}>
+              🔒
+            </div>
+            <h2 style={{ fontSize: '22px', fontWeight: 900, color: '#0F172A', marginBottom: '8px' }}>
+              {hospital.name} — Online Portal Paused
+            </h2>
+            <div style={{ display: 'inline-block', background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', borderRadius: '20px', padding: '3px 12px', fontSize: '11.5px', fontWeight: 800, marginBottom: '16px' }}>
+              Service Suspended • Plan Expired
+            </div>
+            <p style={{ fontSize: '14px', color: '#64748B', lineHeight: '1.6', margin: '0 0 24px 0' }}>
+              Online appointment booking, live token queue, and patient records are temporarily offline for this hospital. Please visit the hospital reception desk directly for walk-in consultations.
+            </p>
+            {hospital.phone && (
+              <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '12px 18px', borderRadius: '12px', display: 'inline-flex', alignItems: 'center', gap: '8px', color: '#1E293B', fontWeight: 700, fontSize: '13px' }}>
+                📞 Hospital Reception: <a href={`tel:${hospital.phone}`} style={{ color: '#2563EB', textDecoration: 'none' }}>{hospital.phone}</a>
+              </div>
+            )}
+          </div>
+        ) : !token ? (
           <div className="p-auth-container">
             <h2>{t('welcome')} {hospital.name}</h2>
             <p>{t('phoneLogin')}</p>

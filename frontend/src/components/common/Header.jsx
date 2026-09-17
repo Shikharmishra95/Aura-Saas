@@ -208,25 +208,35 @@ export default function Header({
           </span>
         </button>
         
-        {token && (userRole === 'ADMIN' || userRole === 'RECEPTIONIST') && (
-          <button 
-            onClick={() => {
-              const hospSlug = (activeHospital?.slug || activeHospital?.id || localStorage.getItem('hospital_id') || '').trim();
-              const cleanSlug = hospSlug.replace(/^\/+|\/+$/g, '');
-              const url = cleanSlug ? `${window.location.origin}/p/${cleanSlug}` : `${window.location.origin}/p/portal`;
-              navigator.clipboard.writeText(url);
-              alert("📋 Patient Portal Link copied to clipboard!\nShare this link with your patients to let them book appointments online:\n" + url);
-            }}
-            style={{
-              background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE',
-              borderRadius: '7px', padding: '4px 10px', fontSize: '11px', fontWeight: 800,
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px'
-            }}
-            title="Copy Patient Portal Booking Link to Share with Patients"
-          >
-            🔗 Patient Portal Link
-          </button>
-        )}
+        {token && (userRole === 'ADMIN' || userRole === 'RECEPTIONIST') && (() => {
+          const isExpired = activeHospital?.subscription_status === 'EXPIRED' || activeHospital?.is_expired;
+          return (
+            <button 
+              onClick={() => {
+                if (isExpired) {
+                  alert("⚠️ Patient Portal is temporarily paused because this hospital's subscription has expired.\n\nPlease renew the subscription via Razorpay on the dashboard to reactivate online booking.");
+                  return;
+                }
+                const hospSlug = (activeHospital?.slug || activeHospital?.id || localStorage.getItem('hospital_id') || '').trim();
+                const cleanSlug = hospSlug.replace(/^\/+|\/+$/g, '');
+                const url = cleanSlug ? `${window.location.origin}/p/${cleanSlug}` : `${window.location.origin}/p/portal`;
+                navigator.clipboard.writeText(url);
+                alert("📋 Patient Portal Link copied to clipboard!\nShare this link with your patients to let them book appointments online:\n" + url);
+              }}
+              style={{
+                background: isExpired ? '#FEF2F2' : '#EFF6FF',
+                color: isExpired ? '#DC2626' : '#2563EB',
+                border: isExpired ? '1px solid #FECACA' : '1px solid #BFDBFE',
+                borderRadius: '7px', padding: '4px 10px', fontSize: '11px', fontWeight: 800,
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px',
+                transition: 'all 0.15s'
+              }}
+              title={isExpired ? "Patient Portal Paused (Subscription Expired)" : "Copy Patient Portal Booking Link to Share with Patients"}
+            >
+              {isExpired ? '🔒 Portal Paused' : '🔗 Patient Portal Link'}
+            </button>
+          );
+        })()}
 
         {token && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '3px 8px 3px 10px', borderRadius: '8px' }}>

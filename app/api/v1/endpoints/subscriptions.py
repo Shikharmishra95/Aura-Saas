@@ -26,8 +26,8 @@ async def get_subscription_plans(db: AsyncSession = Depends(get_db)):
             {
                 "plan_code": "STARTER",
                 "display_name": "Starter (15-Day Free Trial)",
-                "description": "15-Day Free Trial for clinics and small hospitals. Renews at ₹1,000/month after trial.",
-                "price_inr": 1000.0,
+                "description": "15-Day Free Trial for clinics and small hospitals. Renews at ₹1,500/month after trial.",
+                "price_inr": 1500.0,
                 "billing_cycle": "MONTHLY",
                 "duration_days": 15,
                 "max_doctors": 1,
@@ -39,7 +39,7 @@ async def get_subscription_plans(db: AsyncSession = Depends(get_db)):
                     "1 Active Doctor Profile",
                     "Basic OPD Schedule & Patient Queue",
                     "Manual Appointment Management",
-                    "Post-Trial Renewal: ₹1,000 / month"
+                    "Post-Trial Renewal: ₹1,500 / month"
                 ]
             },
             {

@@ -121,20 +121,27 @@ class AppointmentTools:
         if not patient_phone or len(patient_phone) < 8:
             return {"success": False, "error": "Patient mobile phone number is required to confirm booking."}
 
-        # Find or create patient in tenant (safely handling duplicate phones)
-        p_stmt = select(Patient).where(Patient.hospital_id == hospital_id, Patient.phone == patient_phone).order_by(Patient.id.desc())
+        # Find or create patient in tenant (safely handling duplicate phones / family members)
+        p_stmt = select(Patient).where(Patient.hospital_id == hospital_id, Patient.phone == patient_phone).order_by(Patient.id.asc())
         patients_found = (await db.execute(p_stmt)).scalars().all()
         patient_rec = None
+        primary_account_name = None
+
         if patients_found:
+            primary_p = patients_found[0]
+            primary_account_name = f"{primary_p.first_name or ''} {primary_p.last_name or ''}".strip()
+
             p_first = patient_full_name.split()[0].lower() if patient_full_name else ""
+            p_full = patient_full_name.strip().lower() if patient_full_name else ""
             for p in patients_found:
-                if p_first and p.first_name and p_first in p.first_name.lower():
+                db_first = (p.first_name or "").strip().lower()
+                db_full = f"{p.first_name or ''} {p.last_name or ''}".strip().lower()
+                if (p_first and db_first == p_first) or (p_full and (p_full == db_full or p_full in db_full or db_full in p_full)):
                     patient_rec = p
                     break
-            if not patient_rec:
-                patient_rec = patients_found[0]
+
         if not patient_rec:
-            parts = patient_full_name.split(maxsplit=1)
+            parts = patient_full_name.split(maxsplit=1) if patient_full_name else ["Patient"]
             fname = parts[0] if parts else "Patient"
             lname = parts[1] if len(parts) > 1 else ""
             patient_rec = Patient(
@@ -191,7 +198,7 @@ class AppointmentTools:
             payment_status="PENDING",
             reason=reason,
             source=source,
-            booked_by_name=patient_full_name
+            booked_by_name=primary_account_name if (primary_account_name and primary_account_name.lower() != f"{patient_rec.first_name} {patient_rec.last_name}".strip().lower()) else None
         )
         db.add(new_appt)
 

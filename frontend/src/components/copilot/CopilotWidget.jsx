@@ -52,6 +52,57 @@ export default function CopilotWidget({
     const timeGreeting = hour < 12 ? 'Good morning' : (hour < 17 ? 'Good afternoon' : 'Good evening');
     const cleanUsername = username ? (username.startsWith('Dr.') ? username : `Dr. ${username}`) : 'Doctor';
     const adminName = username ? (username.toLowerCase().startsWith('admin') ? username : `Admin ${username}`) : 'Admin';
+    const recepName = username ? (username.toLowerCase().startsWith('recep') ? username : `Receptionist ${username}`) : 'Front Desk';
+    const userDisplayName = role === 'DOCTOR' ? cleanUsername : (role === 'RECEPTIONIST' ? recepName : adminName);
+
+    // Expired Hospital Subscription Consultant Persona
+    const isExpired = activeHospital?.subscription_status === 'EXPIRED' || activeHospital?.is_expired;
+    if (isExpired && role !== 'SUPER_ADMIN') {
+      return {
+        welcomeTitle: `${timeGreeting}, ${userDisplayName}! 🔒`,
+        welcomeSubtitle: `${hospName}'s subscription is currently suspended. I am your AURA SaaS Consultant — ask me anything about plans, compare tiers, or get help with instant renewal.`,
+        statusPill: `Subscription Suspended • ${hospName}`,
+        popupSubtitle: "Subscription suspended. Select an option to consult or renew:",
+        popupItems: [
+          { icon: '💳', title: "Renew via Razorpay", query: "How can I renew our hospital subscription plan via Razorpay?" },
+          { icon: '⚖️', title: "Compare Plans", query: "Compare Starter, Pro AI, and Enterprise subscription plans" },
+          { icon: '🩺', title: "Best Plan for Us", query: "Which AURA subscription plan is best for our hospital?" },
+          { icon: '✨', title: "AI Voice Calling", query: "What features are included in the Pro AI Voice plan?" }
+        ],
+        primaryCard: {
+          icon: <DollarSign size={20} color="#FBBF24" />,
+          title: "Explore Renewal & Upgrade Plans",
+          subtitle: "Compare Starter (₹1,500/mo), Pro (₹2,999/mo), and Enterprise (₹29,999/yr)",
+          query: "Compare Starter, Pro, and Enterprise subscription plans"
+        },
+        gridCards: [
+          {
+            icon: <CheckCircle2 size={16} color="#34D399" />,
+            title: "Renew Current Plan",
+            subtitle: "Instant reactivation via Razorpay in 5s",
+            query: "How can I renew our hospital subscription plan via Razorpay?"
+          },
+          {
+            icon: <Users size={16} color="#C4B5FD" />,
+            title: "Which plan is best for us?",
+            subtitle: "Consult based on doctor count & call load",
+            query: "Which AURA subscription plan is best for our hospital?"
+          },
+          {
+            icon: <Sparkles size={16} color="#A78BFA" />,
+            title: "24/7 AI Voice Receptionist",
+            subtitle: "Automated phone appointment booking details",
+            query: "How does the 24/7 AI Voice Phone Receptionist work?"
+          },
+          {
+            icon: <TrendingUp size={16} color="#38BDF8" />,
+            title: "Compare All Tiers",
+            subtitle: "Doctor limits, WhatsApp, and SLAs",
+            query: "What are all the AURA SaaS subscription plans and pricing?"
+          }
+        ]
+      };
+    }
 
     if (role === 'DOCTOR') {
       return {
@@ -509,14 +560,25 @@ export default function CopilotWidget({
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       const hospName = activeHospital?.name || 'AURA SaaS';
-      const roleDisplayName = (userRole || 'STAFF').replace('_', ' ');
-      setMessages([
-        {
-          id: 'welcome',
-          role: 'assistant',
-          content: `Hello ${username || 'there'}! I am your **AURA AI Copilot** for **${hospName}** (${roleDisplayName}).\n\nI can instantly check doctor shift schedules, live appointment queues, open booking slots, patient records, and revenue analytics. Feel free to ask anything!`
-        }
-      ]);
+      const isHospExpired = activeHospital?.subscription_status === 'EXPIRED' || activeHospital?.is_expired;
+      if (isHospExpired && userRole !== 'SUPER_ADMIN') {
+        setMessages([
+          {
+            id: 'welcome',
+            role: 'assistant',
+            content: `Hello ${username || 'there'}! I am your **AURA SaaS Consultant** for **${hospName}**.\n\n🔒 This hospital workspace is currently suspended due to an expired subscription.\n\nYou can ask me anything about **AURA subscription plans (Starter ₹1,500/mo, Pro AI ₹2,999/mo, Enterprise ₹29,999/yr)**, features like **24/7 AI Voice Phone Receptionist**, or **how to renew instantly via Razorpay**.`
+          }
+        ]);
+      } else {
+        const roleDisplayName = (userRole || 'STAFF').replace('_', ' ');
+        setMessages([
+          {
+            id: 'welcome',
+            role: 'assistant',
+            content: `Hello ${username || 'there'}! I am your **AURA AI Copilot** for **${hospName}** (${roleDisplayName}).\n\nI can instantly check doctor shift schedules, live appointment queues, open booking slots, patient records, and revenue analytics. Feel free to ask anything!`
+          }
+        ]);
+      }
     }
   }, [isOpen, activeHospital, activeTab, username, userRole]);
 
@@ -736,7 +798,7 @@ export default function CopilotWidget({
             {roleConfig.welcomeTitle.split('!')[0]}! 👋
           </div>
           <div style={{ fontSize: '11.5px', color: '#94A3B8', marginBottom: '12px', lineHeight: '1.4' }}>
-            I can help you with live records right now:
+            {roleConfig.popupSubtitle || "I can help you with live records right now:"}
           </div>
 
           {/* Capability Quick Chips (Role Specific) */}
@@ -953,7 +1015,7 @@ export default function CopilotWidget({
                 </div>
                 <div style={{ fontSize: '11px', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: '5px', marginTop: '1px' }}>
                   <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#22C55E', boxShadow: '0 0 6px #22C55E' }}></span>
-                  <span>Online</span> • <span style={{ color: '#CBD5E1', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{role === 'SUPER_ADMIN' ? 'Platform Control Tower' : (activeHospital?.name || 'Hospital')}</span>
+                  <span>Online</span> • <span style={{ color: '#CBD5E1', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(userRole || '').toUpperCase() === 'SUPER_ADMIN' ? 'Platform Control Tower' : (activeHospital?.name || 'Hospital')}</span>
                 </div>
               </div>
             </div>
@@ -1031,7 +1093,10 @@ export default function CopilotWidget({
             scrollbarWidth: 'thin'
           }}>
             {/* HERO WELCOME VIEW (Hostinger Agent Style with 1 Primary Card + Divider + 4 Grid Cards) */}
-            {messages.length <= 1 ? (
+            {(() => {
+              const hasUserMessages = messages.some(m => m.role === 'user');
+              if (hasUserMessages) return null;
+              return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', paddingBottom: '4px' }}>
                 {/* Hero Header */}
                 <div style={{ padding: '4px 2px 2px 2px' }}>
@@ -1333,10 +1398,11 @@ export default function CopilotWidget({
                   </div>
                 )}
               </div>
-            ) : null}
+              );
+            })()}
 
-            {/* Conversation Messages Feed */}
-            {messages.length > 1 && messages.slice(1).map((msg, index, arr) => {
+            {/* Conversation Messages Feed (Preserves User Questions & Bot Answers) */}
+            {messages.filter(m => m.id !== 'welcome').map((msg, index, arr) => {
               const isLatestAssistant = msg.role === 'assistant' && index === arr.length - 1;
               return (
                 <div

@@ -222,13 +222,39 @@ async def chat_with_copilot(
             if h_chk and h_chk.plan_expires_at:
                 now_dt = datetime.now()
                 if h_chk.plan_expires_at < now_dt:
-                    exp_date_str = h_chk.plan_expires_at.strftime('%d %b %Y')
-                    return ChatResponse(
-                        conversation_id=req.conversation_id or f"conv_{uuid.uuid4().hex[:8]}",
-                        reply=f"🔒 **{h_chk.name} का सब्सक्रिप्शन प्लान समाप्त (Expired) हो चुका है।**\n\n* **प्लान:** {h_chk.subscription_plan or 'STARTER'}\n* **समाप्ति तिथि:** {exp_date_str}\n\nAI Copilot, ऑटोमेटेड अपॉइंटमेंट्स और हॉस्पिटल ऑटोमेशन दोबारा सक्रिय करने के लिए कृपया **Settings / Plans** से प्लान रिन्यू करें।",
-                        tool_used="subscription_paywall",
-                        suggestions=["Renew Subscription Plan", "View Available Plans"]
-                    )
+                    actor["is_subscription_expired"] = True
+                    actor["subscription_plan"] = h_chk.subscription_plan or "STARTER"
+                    actor["plan_expires_at"] = h_chk.plan_expires_at.strftime('%d %b %Y')
+
+                    msg_low = req.message.lower().strip()
+                    is_plan_or_consulting = any(w in msg_low for w in [
+                        "plan", "plans", "subscription", "pricing", "price", "renew", "renewal",
+                        "upgrade", "starter", "pro", "enterprise", "cost", "feature", "features",
+                        "voice", "calling", "trial", "razorpay", "pay", "payment", "chahiye",
+                        "best", "compare", "difference", "kaunsa", "konsa", "kitne ka", "hi", "hello",
+                        "help", "batao", "options", "recharge", "details"
+                    ])
+
+                    # If asking for operational hospital data while expired, block and guide to plan consultation
+                    if not is_plan_or_consulting:
+                        exp_date_str = h_chk.plan_expires_at.strftime('%d %b %Y')
+                        return ChatResponse(
+                            conversation_id=req.conversation_id or f"conv_{uuid.uuid4().hex[:8]}",
+                            reply=(
+                                f"🔒 **{h_chk.name} का सब्सक्रिप्शन प्लान समाप्त (Expired) हो चुका है।**\n\n"
+                                f"* **समाप्त प्लान:** `{h_chk.subscription_plan or 'STARTER'}` (Expired on: {exp_date_str})\n"
+                                f"* **स्थिति:** हॉस्पिटल ऑपरेशन्स (OPD बुकिंग्स, लाइव रेवेन्यू और EMR रिकॉर्ड्स) अस्थायी रूप से निलंबित हैं।\n\n"
+                                f"💡 **मैं आपकी क्या मदद कर सकता हूँ?**\n"
+                                f"आप मुझसे AURA के **सब्सक्रिप्शन प्लान्स, फीचर्स, 24/7 AI Voice कॉलिंग और प्राइसिंग** के बारे में पूछ सकते हैं — मैं आपके हॉस्पिटल के लिए बेस्ट प्लान चुनने में मदद करूँगा!"
+                            ),
+                            tool_used="subscription_paywall_advisor",
+                            suggestions=[
+                                "AURA ke subscription plans aur pricing kya hai?",
+                                "Hamare hospital ke liye kaunsa plan best rahega?",
+                                "Starter aur Pro AI plan me kya difference hai?",
+                                "Plan renew kaise karein via Razorpay?"
+                            ]
+                        )
 
         # Hydrate logged-in patient details from request body if available
         if req.patient_phone and not actor.get("patient_phone"):
@@ -305,11 +331,13 @@ async def chat_with_copilot(
 
         suggestions = result.get("suggestions")
         if not suggestions:
+            is_expired_status = bool(actor.get("is_subscription_expired"))
             suggestions = CopilotEngine._build_contextual_suggestions(
                 role=actor.get("role", "PATIENT"),
                 tool_used=result.get("tool_used"),
                 query=req.message.strip(),
-                reply=reply_text
+                reply=reply_text,
+                is_expired=is_expired_status
             )
 
         return ChatResponse(

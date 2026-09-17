@@ -351,21 +351,61 @@ class RoleScopedRAGEngine:
             )
         )
 
-        # 6. SuperAdmin SaaS Subscription Tiers & Billing Guide (SUPERADMIN ONLY)
+        # 6. AURA SaaS Official Subscription Plans, Pricing & Feature Catalog (ALL ROLES & GLOBAL)
         self.ingest_document(
             KnowledgeDocument(
-                doc_id="sop_superadmin_tier_management",
+                doc_id="aura_saas_subscription_catalog",
                 hospital_id="GLOBAL",
-                title="SaaS Subscription Tiers & Hospital Quota Management",
-                category="sop",
-                allowed_roles=["SUPER_ADMIN"],
-                visibility="RESTRICTED",
+                title="AURA SaaS Official Subscription Plans, Pricing and Feature Catalog",
+                category="pricing",
+                allowed_roles=["ALL"],
+                visibility="PUBLIC",
                 content=(
-                    "AURA Platform Tier Specifications: "
-                    "- Starter Tier (₹4,999/mo): Up to 3 Doctors, 500 appointments/mo, Basic WhatsApp notifications. "
-                    "- Growth Tier (₹14,999/mo): Up to 10 Doctors, 2,500 appointments/mo, Voice AI Agent, Full EMR, Multi-user RBAC. "
-                    "- Enterprise Tier (₹39,999/mo): Unlimited Doctors, Unlimited Bookings, Dedicated AI Copilot with Custom RAG Knowledge Base, 24x7 Priority Support. "
-                    "Grace Period: 7 days after expiry before automated portal suspension."
+                    "AURA Intelligent Healthcare SaaS Official Subscription Plans & Pricing:\n"
+                    "1. STARTER PLAN (₹1,500 / month after 15-Day Free Trial):\n"
+                    "- Capacity: Up to 1 Active Doctor Profile.\n"
+                    "- Key Features: Basic OPD schedule, live patient queue, manual appointment booking, automated WhatsApp appointment alerts, patient portal link.\n"
+                    "- AI Voice Receptionist: Disabled (Voice calling not available on Starter).\n"
+                    "- Ideal For: Solo practitioners, independent consultation chambers, and small clinics.\n\n"
+                    "2. PRO AI PLAN (₹2,999 / month):\n"
+                    "- Capacity: Up to 5 Active Doctor Profiles.\n"
+                    "- Key Features: 24/7 Live Automated AI Voice Receptionist (Twilio phone line pickup), automated phone appointment booking in Hindi & English, WhatsApp confirmations with token numbers, Razorpay online payments & OPD fee collection, automated doctor schedule management.\n"
+                    "- AI Voice Receptionist: Fully Enabled with low-latency conversational AI.\n"
+                    "- Ideal For: Growing nursing homes, multi-doctor clinics, and hospitals wanting zero missed patient calls.\n\n"
+                    "3. ENTERPRISE 360 PLAN (₹29,999 / year - Annual Flat Saver):\n"
+                    "- Capacity: Unlimited Doctor Profiles across all departments.\n"
+                    "- Key Features: Dedicated priority low-latency Voice LLM, custom hospital white-label branding and logo, multi-branch support, comprehensive financial & doctor matrix analytics, 24/7 dedicated SRE support and 99.9% uptime SLA.\n"
+                    "- Billing: Annual (Flat 20%+ discount compared to monthly billing).\n"
+                    "- Ideal For: Large multi-specialty hospitals with 6+ doctors, high patient footfall, and high call volumes.\n\n"
+                    "Renewal & Activation: Instant reactivation via Razorpay in under 5 seconds. All patient records, histories, and doctor profiles are securely preserved during plan expiry.\n"
+                    "Keywords: subscription plans, plan details, pricing list, kitne ka hai, plans comparison, starter pro enterprise, price list, calling plan, recharge, renew subscription, cost, fees."
+                )
+            )
+        )
+
+        # 7. AURA SaaS Plan Selection & Consultation Guidelines (ALL ROLES & GLOBAL)
+        self.ingest_document(
+            KnowledgeDocument(
+                doc_id="aura_saas_plan_consultant_guide",
+                hospital_id="GLOBAL",
+                title="AURA SaaS Hospital Plan Consultation & Recommendation Guidelines",
+                category="consulting",
+                allowed_roles=["ALL"],
+                visibility="PUBLIC",
+                content=(
+                    "AURA SaaS Plan Recommendation Logic (ChatGPT-style consultation):\n"
+                    "- Recommendation by Doctor Count:\n"
+                    "  * 1 Doctor: Recommend Starter Plan (₹1,500/mo). Most affordable entry point.\n"
+                    "  * 2 to 5 Doctors: Recommend PRO AI Plan (₹2,999/mo). Perfectly covers up to 5 doctors and includes 24/7 AI Voice phone booking.\n"
+                    "  * 6 or more Doctors: Recommend Enterprise 360 (₹29,999/yr). Unlimited doctor profiles and priority voice channels.\n"
+                    "- Recommendation by Calling & Automation Need:\n"
+                    "  * If user asks for automated phone reception, missed call booking, or voice agent: Always recommend PRO AI or Enterprise, as Starter does not include AI Voice.\n"
+                    "  * Explain that a single missed patient appointment costs ₹500 to ₹1,000, so the PRO plan (₹2,999/mo) pays for itself in just 3-4 appointments.\n"
+                    "- Recommendation for Expired Hospitals:\n"
+                    "  * Be polite, empathetic, and encouraging. Explain that all their data and doctor schedules are safely preserved.\n"
+                    "  * If they previously had Starter and now have multiple doctors, suggest upgrading to PRO for AI Voice capabilities.\n"
+                    "  * Guide them to click the 'Renew Now via Razorpay' button directly on their workspace screen for 5-second instant reactivation.\n"
+                    "Keywords: kaunsa plan lena chahiye, hamare hospital ke liye best plan, kaun sa plan sahi rahega, doctors limit, voice calling, renewal, upgrade, recharge, payment, best plan for hospital, hamare doctors hain."
                 )
             )
         )
