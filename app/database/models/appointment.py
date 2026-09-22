@@ -1,7 +1,7 @@
 from datetime import datetime, date, time
 from typing import List, Optional
 from sqlalchemy import String, Integer, Boolean, Time, Date, DateTime, Text, ForeignKey, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 from app.database.declarative import Base
 
@@ -202,6 +202,9 @@ class Patient(Base):
 
 class Appointment(Base):
     __tablename__ = "appointments"
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "appointment_datetime", "active_slot_token", name="uq_doctor_appointment_slot"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     hospital_id: Mapped[str] = mapped_column(ForeignKey("hospitals.id", ondelete="CASCADE"), nullable=False)
@@ -210,6 +213,7 @@ class Appointment(Base):
     appointment_datetime: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
     status: Mapped[str] = mapped_column(String(50), default="SCHEDULED")
+    active_slot_token: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     payment_status: Mapped[str] = mapped_column(String(50), default="PENDING")
     payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="ONLINE")
     consultation_status: Mapped[str] = mapped_column(String(50), default="PENDING")
@@ -220,6 +224,21 @@ class Appointment(Base):
     reschedule_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.status == "CANCELLED":
+            self.active_slot_token = None
+        elif self.active_slot_token is None:
+            self.active_slot_token = "ACTIVE"
+
+    @validates("status")
+    def _validate_status_active_token(self, key, value):
+        if value == "CANCELLED":
+            self.active_slot_token = None
+        elif not getattr(self, "active_slot_token", None) and value != "CANCELLED":
+            self.active_slot_token = "ACTIVE"
+        return value
 
     # Relationships
     hospital: Mapped["Hospital"] = relationship("Hospital", back_populates="appointments")

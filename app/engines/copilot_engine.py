@@ -958,7 +958,8 @@ class CopilotEngine:
                 context_state.patient_name = acc_name
 
         if extracted.doctor_name:
-            context_state.current_doctor_name = extracted.doctor_name
+            if not (context_state and getattr(context_state, "current_doctor_id", None)):
+                context_state.current_doctor_name = extracted.doctor_name
         if extracted.date_str:
             context_state.selected_date = extracted.date_str
         if extracted.time_str:
@@ -1011,22 +1012,42 @@ class CopilotEngine:
                 "route": "ACTION"
             }
 
-        # 2. Check offline deterministic match first (guarantees sub-20ms response, slot-filling continuity, and zero-hallucination)
-        offline_res = await cls._match_offline_intent(
-            user_message, role, hospital_id, user_id, db,
-            context_state=context_state, actor_profile=actor_profile
+        # 2. Multi-Turn Booking & Offline Emergency Guard:
+        # - If user is actively in a slot-filling session (providing patient name/phone/slot)
+        #   or enters an explicit direct booking action, route to the deterministic booking state machine.
+        # - If external LLM engine is unconfigured, use deterministic offline matcher.
+        # - Otherwise, pass natural language inquiries directly to Tier-1A Groq Agentic ReAct Brain!
+        is_in_booking_flow = bool(context_state and getattr(context_state, "booking_in_progress", False))
+        msg_norm_check = (user_message or "").lower()
+        booking_action_pats = [
+            r"\bwant\s+to?\s*book\b", r"\bbook\s+for\b", r"\bbook\s+an?\s+appointment\b",
+            r"\bappointment\s+book\b", r"\bbook\s+appointment\b", r"\bslot\s+book\b",
+            r"\bbook\s+slot\b", r"\bbooking\s+karo\b", r"\bparcha\s+banao\b",
+            r"\bnayi\s+booking\b", r"\bbook\s+kar\s+do\b", r"\bbook\s+kr\s+do\b",
+            r"\bappointment\s+schedule\b", r"\bschedule\s+appointment\b"
+        ]
+        has_explicit_booking_action = any(re.search(pat, msg_norm_check) for pat in booking_action_pats) and not any(
+            w in msg_norm_check for w in ["timing", "schedule", "fees", "fee", "rate", "cost", "kyu", "why", "cancel", "kiska", "kiske", "lowest", "highest"]
         )
-        if offline_res:
-            offline_res["route"] = "LIVE_DATA"
-            if not offline_res.get("suggestions"):
-                offline_res["suggestions"] = cls._build_contextual_suggestions(
-                    role=role,
-                    tool_used=offline_res.get("tool_used"),
-                    query=user_message,
-                    reply=offline_res.get("reply", ""),
-                    is_expired=bool(actor_profile and actor_profile.get("is_subscription_expired"))
-                )
-            return offline_res
+        is_llm_ready = GroqClient.is_configured()
+
+        if is_in_booking_flow or has_explicit_booking_action or not is_llm_ready:
+            offline_res = await cls._match_offline_intent(
+                user_message, role, hospital_id, user_id, db,
+                context_state=context_state, actor_profile=actor_profile
+            )
+            if offline_res:
+                offline_res["route"] = "LIVE_DATA"
+                if not offline_res.get("suggestions"):
+                    offline_res["suggestions"] = cls._build_contextual_suggestions(
+                        role=role,
+                        tool_used=offline_res.get("tool_used"),
+                        query=user_message,
+                        reply=offline_res.get("reply", ""),
+                        is_expired=bool(actor_profile and actor_profile.get("is_subscription_expired"))
+                    )
+                return offline_res
+
 
         # 3. 5-Way Intent Routing
         decision: RouterDecision = await intent_router.route_query(
@@ -1209,7 +1230,9 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
 """
 
         # Pruned Tools passed to LLM (Disabled when hospital subscription is expired to ensure pure consultation)
-        tools_spec = [] if is_expired_hospital else decision.pruned_tools
+        tools_spec = [] if is_expired_hospital else (
+            decision.pruned_tools if decision.pruned_tools else tool_registry.prune_tools_for_user(query=user_message, user_role=role, top_k=25)
+        )
 
         contents = []
         for msg in chat_history[-10:]:
@@ -1706,8 +1729,6 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
         executed_tool_result = None
 
         models_to_try = [model_name]
-        if "qwen3.6-27b" not in model_name:
-            models_to_try.append("qwen/qwen3.6-27b")
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -1887,6 +1908,12 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     db=db
                 )
                 if intel_res:
+                    if context_state and isinstance(intel_res.get("tool_result"), dict):
+                        doc_data = intel_res["tool_result"].get("doctor")
+                        if doc_data and isinstance(doc_data, dict):
+                            context_state.current_doctor_id = doc_data.get("id")
+                            context_state.current_doctor_name = doc_data.get("full_name") or f"Dr. {doc_data.get('first_name', '')} {doc_data.get('last_name', '')}".strip()
+                            context_state.department = doc_data.get("department")
                     return intel_res
             except Exception as intel_e:
                 logger.warning(f"HospitalDirectoryIntel evaluation error: {intel_e}")
@@ -1987,23 +2014,52 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             can_switch_doc = not already_has_doc or has_doc_intent
 
             if can_switch_doc:
+                exact_matches = []
+                partial_matches = []
                 for d, dept in active_docs:
-                    full_n = f"{d.first_name} {d.last_name}".lower()
-                    fname = d.first_name.lower()
-                    lname = d.last_name.lower()
-                    
+                    full_n = f"{d.first_name} {d.last_name}".lower().strip()
+                    fname = d.first_name.lower().strip()
+                    lname = d.last_name.lower().strip()
+
                     full_match = full_n in msg_lower
                     fname_match = bool(re.search(rf"\b{re.escape(fname)}\b", msg_lower))
                     lname_match = bool(re.search(rf"\b(?:dr\.?|doctor)\s+{re.escape(lname)}\b", msg_lower))
                     dept_match = bool(re.search(rf"\b{re.escape(dept.name.lower())}\b", msg_lower))
 
-                    if full_match or fname_match or lname_match or dept_match:
-                        matched_doc = d
-                        matched_dept = dept
-                        break
+                    if full_match:
+                        exact_matches.append((d, dept))
+                    elif fname_match or lname_match:
+                        partial_matches.append((d, dept))
+                    elif dept_match:
+                        partial_matches.append((d, dept))
+
+                if len(exact_matches) == 1:
+                    matched_doc, matched_dept = exact_matches[0]
+                elif len(exact_matches) > 1:
+                    candidates = exact_matches
+                    doc_lines = [f"{i+1}. **Dr. {d.first_name} {d.last_name}** ({dept.name} — Fee: ₹{d.opd_fees or 500})" for i, (d, dept) in enumerate(candidates)]
+                    reply = (
+                        f"### ❓ Doctor Disambiguation\n\n"
+                        f"Hospital me **{len(candidates)} doctors** match ho rahe hain:\n\n"
+                        + "\n".join(doc_lines) +
+                        f"\n\nAap kiske sath appointment book karna chahte hain? Kripya doctor ka pura naam ya department batayein."
+                    )
+                    return {"reply": reply, "tool_used": "resolve_doctor_ambiguity", "tool_result": {"status": "AMBIGUOUS"}}
+                elif len(partial_matches) == 1:
+                    matched_doc, matched_dept = partial_matches[0]
+                elif len(partial_matches) > 1:
+                    candidates = partial_matches
+                    doc_lines = [f"{i+1}. **Dr. {d.first_name} {d.last_name}** ({dept.name} — Fee: ₹{d.opd_fees or 500})" for i, (d, dept) in enumerate(candidates)]
+                    reply = (
+                        f"### ❓ Doctor Disambiguation\n\n"
+                        f"Hospital me **{len(candidates)} doctors** is naam se match ho rahe hain:\n\n"
+                        + "\n".join(doc_lines) +
+                        f"\n\nAap kiske sath appointment book karna chahte hain? Kripya doctor ka pura naam ya department batayein."
+                    )
+                    return {"reply": reply, "tool_used": "resolve_doctor_ambiguity", "tool_result": {"status": "AMBIGUOUS"}}
 
             if matched_doc and context_state:
-                context_state.current_doctor_name = f"Dr. {matched_doc.first_name} {matched_doc.last_name}"
+                context_state.current_doctor_name = f"Dr. {matched_doc.first_name} {matched_doc.last_name}".strip()
                 context_state.current_doctor_id = matched_doc.id
                 context_state.department = matched_dept.name
 
@@ -2082,16 +2138,24 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     context_state.booking_in_progress = True
                     context_state.dialog_state = "AWAITING_PATIENT_DETAILS"
                 fee_val = 500
+                cur_dept = getattr(context_state, 'department', None)
+                if cur_dept in ["None", "none", None]:
+                    cur_dept = None
                 for d, dept in active_docs:
                     if d.id == (context_state.current_doctor_id if context_state else None) or (d.first_name.lower() in cur_doc.lower()):
                         fee_val = d.opd_fees or 500
+                        if not cur_dept:
+                            cur_dept = dept.name
+                            if context_state:
+                                context_state.department = dept.name
                         break
+                dept_label = cur_dept or "General OPD"
 
                 if cur_pname and not cur_phone:
                     reply = (
                         f"### 🗓️ Booking with {cur_doc}\n\n"
                         f"* **Patient Name:** **{cur_pname}**\n"
-                        f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
+                        f"* **Department:** {dept_label}\n"
                         f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
                         f"* **Consultation Fee:** ₹{fee_val}\n\n"
                         f"Please provide the **10-digit Mobile Number** for **{cur_pname}** to proceed.\n\n"
@@ -2101,7 +2165,7 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     reply = (
                         f"### 🗓️ Booking with {cur_doc}\n\n"
                         f"* **Mobile:** **{cur_phone}**\n"
-                        f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
+                        f"* **Department:** {dept_label}\n"
                         f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
                         f"* **Consultation Fee:** ₹{fee_val}\n\n"
                         f"Please provide the **Patient's Full Name** to proceed.\n\n"
@@ -2110,7 +2174,7 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                 else:
                     reply = (
                         f"### 🗓️ Booking with {cur_doc}\n\n"
-                        f"* **Department:** {getattr(context_state, 'department', 'OPD')}\n"
+                        f"* **Department:** {dept_label}\n"
                         f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
                         f"* **Consultation Fee:** ₹{fee_val}\n\n"
                         f"Please provide the **Patient's Full Name** and **10-digit Mobile Number** to proceed.\n\n"
@@ -2120,10 +2184,18 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
 
             # CASE 3: All details are available -> Stage or Update confirmation
             fee_val = 500
+            cur_dept = getattr(context_state, 'department', None)
+            if cur_dept in ["None", "none", None]:
+                cur_dept = None
             for d, dept in active_docs:
                 if d.id == (context_state.current_doctor_id if context_state else None) or (d.first_name.lower() in cur_doc.lower()):
                     fee_val = d.opd_fees or 500
+                    if not cur_dept:
+                        cur_dept = dept.name
+                        if context_state:
+                            context_state.department = dept.name
                     break
+            dept_label = cur_dept or "General OPD"
 
             conf_tok = conversation_memory.create_confirmation_token(
                 hospital_id=hospital_id or "GLOBAL",
@@ -2148,7 +2220,7 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             reply = (
                 f"### {card_title}\n\n"
                 f"Please verify the details below before generating the token:\n\n"
-                f"* **Doctor:** **{cur_doc}** ({getattr(context_state, 'department', 'OPD')})\n"
+                f"* **Doctor:** **{cur_doc}** ({dept_label})\n"
                 f"* **Date & Time:** **{cur_date}** at **{cur_time}**\n"
                 f"* **Patient:** **{cur_pname}** (📱 {cur_phone})\n"
                 f"* **OPD Fee:** ₹{fee_val}\n\n"

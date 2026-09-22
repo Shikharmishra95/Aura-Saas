@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, date
@@ -393,6 +394,13 @@ async def book_appointment(request: BookAppointmentRequest, current_patient=Depe
         if req_id:
             log_data["request_id"] = req_id
         logger.info(json.dumps(log_data))
+    except IntegrityError as ie:
+        await db.rollback()
+        logger.warning(f"Double-booking prevented by unique constraint in patient portal booking: {ie}")
+        raise HTTPException(
+            status_code=400,
+            detail="The selected time slot for this doctor is already booked. Please choose another slot."
+        )
     except Exception as e:
         await db.rollback()
         logger.error(f"Error during patient portal booking database transaction: {str(e)}")

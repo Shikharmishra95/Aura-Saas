@@ -33,6 +33,18 @@ class GroqClient:
         return getattr(settings, "GROQ_MODEL", "qwen/qwen3.8-27b") or "qwen/qwen3.8-27b"
 
     @classmethod
+    def _normalize_schema(cls, o: Any) -> Any:
+        """Recursively normalizes uppercase JSON schema types to valid standard lowercase types."""
+        if isinstance(o, dict):
+            return {
+                k: (v.lower() if k == "type" and isinstance(v, str) else cls._normalize_schema(v))
+                for k, v in o.items()
+            }
+        if isinstance(o, list):
+            return [cls._normalize_schema(x) for x in o]
+        return o
+
+    @classmethod
     async def chat_completion(
         cls,
         system_instruction: str,
@@ -84,7 +96,7 @@ class GroqClient:
                     "function": {
                         "name": t.get("name"),
                         "description": t.get("description", ""),
-                        "parameters": t.get("parameters", {"type": "object", "properties": {}})
+                        "parameters": cls._normalize_schema(t.get("parameters", {"type": "object", "properties": {}}))
                     }
                 })
             payload["tools"] = groq_tools

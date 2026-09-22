@@ -5,7 +5,12 @@ import Sidebar from './components/common/Sidebar';
 import PatientProfileModal from './components/common/Modals/PatientProfileModal';
 import ProfileModal from './components/common/ProfileModal';
 import CopilotWidget from './components/copilot/CopilotWidget';
-import ControlTower from './components/superadmin/ControlTower';
+import SuperAdminDashboard from './components/superadmin/SuperAdminDashboard';
+import PrescriptionModal from './components/modals/PrescriptionModal';
+import RescheduleModal from './components/modals/RescheduleModal';
+import CancelAppointmentModal from './components/modals/CancelAppointmentModal';
+import UpgradeSubscriptionModal from './components/modals/UpgradeSubscriptionModal';
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Shield, 
@@ -37,272 +42,10 @@ import PatientPortal from './PatientPortal';
 // API base - always use relative path (Vite proxy forwards /api → localhost:8000)
 const API_BASE = '/api/v1';
 
-const TRANSLATIONS = {
-  en: {
-    // Auth & Common
-    login: "Login",
-    logout: "Logout",
-    username: "Username",
-    password: "Password",
-    hospitalId: "Hospital ID",
-    selectRole: "Select Your Role",
-    welcome: "Welcome",
-    platformOwner: "Platform Owner",
-    superAdmin: "Super Admin",
-    receptionist: "Receptionist",
-    doctor: "Doctor",
-    admin: "Admin",
-    status: "Status",
-    actions: "Actions",
-    date: "Date",
-    time: "Time",
-    reason: "Reason",
-    phone: "Phone Number",
-    age: "Age",
-    name: "Name",
-    gender: "Gender",
-    search: "Search",
-    loading: "Loading...",
-    success: "Success",
-    error: "Error",
-    close: "Close",
-    cancel: "Cancel",
-    confirm: "Confirm",
-    save: "Save Changes",
-    // Tabs & Navigation
-    overview: "Overview",
-    newBooking: "New Booking",
-    patientSearch: "Patient Search",
-    receptionistLeaves: "🏖️ Doctor Leaves",
-    adminOverview: "Admin Overview",
-    staffManagement: "Staff Management",
-    hospitalOverview: "Hospital Overview",
-    adminLeaves: "Admin Leaves",
-    appointments: "Patient Queue",
-    doctorLeaves: "🏖️ Apply Leave",
-    superAdminTab: "Super Admin Dashboard",
-    // Dashboard Stats
-    totalAppointments: "Total Appointments",
-    scheduled: "Scheduled",
-    completed: "Completed",
-    cancelled: "Cancelled",
-    activeDoctors: "Active Doctors",
-    pendingPayment: "Pending Payment",
-    paid: "Paid",
-    missed: "Missed",
-    // Action Buttons
-    complete: "Complete",
-    reschedule: "Reschedule",
-    cancelBooking: "Cancel Booking",
-    // Settings
-    profileSettings: "Hospital Profile Settings",
-    opdSettings: "OPD Settings",
-    whatsappConfig: "WhatsApp Notification Number",
-    greetingConfig: "Voice Receptionist Greeting",
-    promptConfig: "Voice Assistant Instruction Prompt",
-    // Table Column Headers
-    col_time: "Time",
-    col_patient: "Patient",
-    col_mobile: "Mobile",
-    col_reason: "Reason / Problem",
-    col_payment: "Payment",
-    col_status_action: "Status / Action",
-    doc_fee_list: "Doctor, Schedule & Fee List",
-    // Date Nav Buttons
-    btn_prev: "\u25c4 Prev",
-    btn_today: "Today",
-    btn_next: "Next \u25ba",
-    // Empty / Error States
-    no_bookings_date: "No appointments booked for this date.",
-    search_failed: "Search failed. Please try again.",
-    no_patient_found: "No patient record found.",
-    // Status Badges
-    on_leave: "\u26a0\ufe0f On Leave",
-    off_duty: "Off Duty / Closed",
-    doc_on_leave_banner: "\u26a0\ufe0f DOCTOR IS ON LEAVE",
-    // Section Headings
-    patient_lookup_heading: "Patient Lookup Engine",
-    active_leaves_heading: "\ud83d\udcc5 Active Doctor Leaves",
-    apply_leave_heading: "\ud83d\udcdd Apply For Leave",
-    my_leaves_heading: "\ud83d\udcc5 My Registered Leaves",
-    recep_dashboard_sub: "Receptionist Dashboard \u2014 AI Voice Booking System",
-    // Form Labels
-    lbl_doctor: "Doctor",
-    lbl_receptionist: "Receptionist",
-    lbl_opd_fees: "OPD Fees (\u20b9)",
-    lbl_slot_dur: "Slot Duration (min) *",
-    lbl_sched_days: "Schedule Days (Weekly) *",
-    lbl_reason: "Reason",
-    lbl_admin_uname: "Admin Username *",
-    lbl_admin_pass: "Admin Password",
-    lbl_ai_greeting: "AI Greeting Message *",
-    lbl_sys_prompt: "Custom System Prompt (Optional)",
-    lbl_doc_pass: "Doctor Password",
-    lbl_password_field: "Password",
-    err_select_doc: "Please select a doctor.",
-    err_select_slot: "Please select a time slot.",
-    payment_mode_heading: "\ud83d\udcb3 Payment Mode",
-    // Prescription Templates
-    quick_presc_tmpl: "\u26a1 Quick Prescription Template",
-    tmpl_fever: "Mild Fever & Body Pain",
-    tmpl_cold: "Cold, Cough & Throat Infection",
-    tmpl_acidity: "Stomach Acidity & Gas",
-    tmpl_stomach: "Stomach Infection / Loose Motion",
-    lbl_clinical_notes: "Clinical Notes / Diagnosis Summary",
-    lbl_presc_meds: "Prescription Medicines & Dosage",
-    // Day Abbreviations
-    day_mon: "Mon", day_tue: "Tue", day_wed: "Wed", day_thu: "Thu",
-    day_fri: "Fri", day_sat: "Sat", day_sun: "Sun",
-    // Confirmation Dialogs
-    confirm_del_leave: "Are you sure you want to delete this leave?",
-    confirm_appr_leave: "Are you sure you want to approve this leave?",
-    confirm_rej_leave: "Are you sure you want to reject this leave?",
-    confirm_del_staff: "Are you sure you want to remove this staff member?",
-    // Misc
-    default_schedule: "Mon\u2013Fri, 10:00 AM - 01:00 PM | 02:00 PM - 05:00 PM",
-    leave_reason_placeholder: "e.g. Sick Leave, Personal Work",
-    ai_prompt_placeholder: "You are the AI virtual receptionist. Your job is...",
-  },
-  hi: {
-    // Auth & Common
-    login: "लॉगिन करें",
-    logout: "लॉगआउट",
-    username: "यूज़रनेम",
-    password: "पासवर्ड",
-    hospitalId: "अस्पताल आईडी",
-    selectRole: "अपनी भूमिका चुनें",
-    welcome: "स्वागत है",
-    platformOwner: "प्लेटफॉर्म ओनर",
-    superAdmin: "सुपर एडमिन",
-    receptionist: "रिसेप्शनिस्ट",
-    doctor: "डॉक्टर",
-    admin: "एडमिन",
-    status: "स्थिति",
-    actions: "कार्रवाई",
-    date: "तारीख",
-    time: "समय",
-    reason: "कारण",
-    phone: "फ़ोन नंबर",
-    age: "उम्र",
-    name: "नाम",
-    gender: "लिंग",
-    search: "खोजें",
-    loading: "लोड हो रहा है...",
-    success: "सफलता",
-    error: "त्रुटि",
-    close: "बंद करें",
-    cancel: "रद्द करें",
-    confirm: "पुष्टि करें",
-    save: "बदलाव सहेजें",
-    // Tabs & Navigation
-    overview: "मुख्य विवरण",
-    newBooking: "नया अपॉइंटमेंट",
-    patientSearch: "मरीज़ खोज",
-    receptionistLeaves: "🏖️ डॉक्टर छुट्टियां",
-    adminOverview: "एडमिन अवलोकन",
-    staffManagement: "स्टाफ प्रबंधन",
-    hospitalOverview: "अस्पताल प्रोफाइल",
-    adminLeaves: "एडमिन छुट्टियां",
-    appointments: "मरीज़ कतार",
-    doctorLeaves: "🏖️ अवकाश आवेदन",
-    superAdminTab: "सुपर एडमिन डैशबोर्ड",
-    // Dashboard Stats
-    totalAppointments: "कुल अपॉइंटमेंट्स",
-    scheduled: "निर्धारित",
-    completed: "पूरा हुआ",
-    cancelled: "रद्द",
-    activeDoctors: "सक्रिय डॉक्टर",
-    pendingPayment: "भुगतान लंबित",
-    paid: "भुगतान हो गया",
-    missed: "छूट गया",
-    // Action Buttons
-    complete: "पूरा करें",
-    reschedule: "समय बदलें",
-    cancelBooking: "रद्द करें",
-    // Settings
-    profileSettings: "अस्पताल प्रोफाइल सेटिंग्स",
-    opdSettings: "ओपीडी सेटिंग्स",
-    whatsappConfig: "व्हाट्सएप नोटिफिकेशन नंबर",
-    greetingConfig: "रिसेप्शनिस्ट वॉयस ग्रीटिंग",
-    promptConfig: "वॉयस असिस्टेंट निर्देश प्रॉम्ट",
-    // Table Column Headers
-    col_time: "समय",
-    col_patient: "मरीज़",
-    col_mobile: "मोबाइल",
-    col_reason: "समस्या / कारण",
-    col_payment: "भुगतान",
-    col_status_action: "स्थिति / कार्रवाई",
-    doc_fee_list: "डॉक्टर, समय एवं फीस सूची",
-    // Date Nav Buttons
-    btn_prev: "◄ पिछला",
-    btn_today: "आज",
-    btn_next: "अगला ►",
-    // Empty / Error States
-    no_bookings_date: "इस तारीख के लिए कोई भी अपॉइंटमेंट बुक नहीं है।",
-    search_failed: "खोज विफल रही। कृपया पुनः प्रयास करें।",
-    no_patient_found: "कोई मरीज रिकॉर्ड नहीं मिला।",
-    // Status Badges
-    on_leave: "⚠️ अवकाश पर",
-    off_duty: "ड्यूटी समाप्त / बंद",
-    doc_on_leave_banner: "⚠️ डॉक्टर अवकाश पर हैं",
-    // Section Headings
-    patient_lookup_heading: "मरीज़ खोज इंजन",
-    active_leaves_heading: "📅 सक्रिय डॉक्टर अवकाश",
-    apply_leave_heading: "📝 अवकाश के लिए आवेदन",
-    my_leaves_heading: "📅 मेरे पंजीकृत अवकाश",
-    recep_dashboard_sub: "रिसेप्शनिस्ट डैशबोर्ड — AI वॉयस बुकिंग सिस्टम",
-    // Form Labels
-    lbl_doctor: "डॉक्टर",
-    lbl_receptionist: "रिसेप्शनिस्ट",
-    lbl_opd_fees: "ओपीडी फीस (₹)",
-    lbl_slot_dur: "स्लॉट अवधि (मिनट) *",
-    lbl_sched_days: "साप्ताहिक दिन *",
-    lbl_reason: "कारण",
-    lbl_admin_uname: "एडमिन यूज़रनेम *",
-    lbl_admin_pass: "एडमिन पासवर्ड",
-    lbl_ai_greeting: "AI स्वागत संदेश *",
-    lbl_sys_prompt: "कस्टम AI निर्देश (वैकल्पिक)",
-    lbl_doc_pass: "डॉक्टर पासवर्ड",
-    lbl_password_field: "पासवर्ड",
-    err_select_doc: "कृपया डॉक्टर का चयन करें।",
-    err_select_slot: "कृपया समय स्लॉट का चयन करें।",
-    payment_mode_heading: "💳 भुगतान विकल्प",
-    // Prescription Templates
-    quick_presc_tmpl: "⚡ त्वरित पर्चा टेम्पलेट",
-    tmpl_fever: "सामान्य बुखार एवं बदन दर्द",
-    tmpl_cold: "सर्दी, खांसी एवं गले में संक्रमण",
-    tmpl_acidity: "गैस एवं एसिडिटी",
-    tmpl_stomach: "पेट दर्द एवं दस्त",
-    lbl_clinical_notes: "क्लीनिकल नोट्स / निदान सारांश",
-    lbl_presc_meds: "दवाइयों की सूची एवं खुराक",
-    // Day Abbreviations
-    day_mon: "सोम", day_tue: "मंगल", day_wed: "बुध", day_thu: "गुरु",
-    day_fri: "शुक्र", day_sat: "शनि", day_sun: "रवि",
-    // Confirmation Dialogs
-    confirm_del_leave: "क्या आप सच में इस छुट्टी को हटाना चाहते हैं?",
-    confirm_appr_leave: "क्या आप सच में इस छुट्टी को स्वीकृत (Approve) करना चाहते हैं?",
-    confirm_rej_leave: "क्या आप सच में इस छुट्टी को अस्वीकृत (Reject) करना चाहते हैं?",
-    confirm_del_staff: "क्या आप सच में इस स्टाफ को हटाना चाहते हैं?",
-    // Misc
-    default_schedule: "सोम–शुक्र, 10:00 AM - 01:00 PM | 02:00 PM - 05:00 PM",
-    leave_reason_placeholder: "उदा. अस्वस्थता, व्यक्तिगत कार्य",
-    ai_prompt_placeholder: "तुम अपोलो हॉस्पिटल की AI वर्चुअल रिसेप्शनिस्ट हो। तुम्हारा काम...",
-  }
-};
+import { TRANSLATIONS } from './i18n/translations';
+import { formatDoctorTimingsToEnglish } from './utils/formatters';
+export { formatDoctorTimingsToEnglish };
 
-export const formatDoctorTimingsToEnglish = (timings) => {
-  if (!timings) return 'Mon – Sat: 10:00 AM – 01:00 PM';
-  return timings
-    .replace(/सोम–शनि/g, 'Mon–Sat')
-    .replace(/सोम–शुक्र/g, 'Mon–Fri')
-    .replace(/सोम/g, 'Mon')
-    .replace(/मंगल/g, 'Tue')
-    .replace(/बुध/g, 'Wed')
-    .replace(/गुरु/g, 'Thu')
-    .replace(/शुक्र/g, 'Fri')
-    .replace(/शनि/g, 'Sat')
-    .replace(/रवि/g, 'Sun');
-};
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('jwt_token') || '');
@@ -4964,252 +4707,37 @@ function App() {
       )}
 
       {/* A. Receptionist Prescription Complete Modal */}
-      {prescriptionModalOpen && prescAppointment && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '600px' }}>
-            <h3 style={{ color: 'var(--text-main)', marginBottom: '15px' }}>
-              {prescIsViewMode ? `Consultation Details: ${prescAppointment.patient_name}` : `Prescribe & Complete Consultation: ${prescAppointment.patient_name}`}
-            </h3>
-            {prescIsViewMode && prescAppointment.consultation_completed_at && (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '15px' }}>
-                Completed on: {new Date(prescAppointment.consultation_completed_at).toLocaleString('hi-IN')}
-              </div>
-            )}
-            
-            <form onSubmit={(e) => handleCompleteConsultation(e, prescAppointment.id, prescNotes, prescMedicines, prescFollowUp)} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-              
-              {!prescIsViewMode && (
-                <div className="form-group" style={{ background: 'rgba(102,252,241,0.04)', border: '1px solid rgba(102,252,241,0.15)', padding: '12px', borderRadius: '8px', marginBottom: '5px' }}>
-                  <label style={{ fontWeight: 700, color: 'var(--color-primary)', display: 'block', marginBottom: '8px', fontSize: '13px' }}>{t('quick_presc_tmpl')}</label>
-                  <select 
-                    className="form-control"
-                    onChange={e => {
-                      const templates = [
-                        { notes: "", prescription: "" },
-                        {
-                          notes: "Patient complained of mild viral fever, headache and body ache for 2 days. Chest clear. Advised hydration.",
-                          prescription: "1. Tab Paracetamol 650mg - 1 Tab twice daily after meals - 3 Days\n2. Tab Pantocid 40mg - 1 Tab once daily before breakfast - 3 Days\n3. Drink plenty of warm water and take complete rest."
-                        },
-                        {
-                          notes: "Sore throat, dry cough, mild nasal congestion. No difficulty breathing.",
-                          prescription: "1. Tab Cetirizine 10mg - 1 Tab once daily at bedtime - 5 Days\n2. Syrup Alex Cough Syrup - 5ml thrice daily - 5 Days\n3. Tab Vitamin C 500mg - 1 Tab daily - 10 Days\n4. Steam inhalation twice daily."
-                        },
-                        {
-                          notes: "Epigastric burning sensation, bloating after meals. Advised light non-spicy meals.",
-                          prescription: "1. Cap Pantoprazole 40mg + Domperidone 30mg - 1 Cap empty stomach in morning - 5 Days\n2. Syrup Digene - 10ml twice daily after meals - 5 Days\n3. Avoid tea, coffee and oily foods."
-                        },
-                        {
-                          notes: "Watery stools 4-5 times, mild abdominal cramp, dehydration symptoms.",
-                          prescription: "1. Tab Ofloxacin 200mg + Ornidazole 500mg - 1 Tab twice daily after meals - 5 Days\n2. ORS Solution - 1 sachet dissolved in 1L water, sip throughout the day - 3 Days\n3. Tab Loperamide 2mg - 1 Tab only if loose motion persists - SOS"
-                        }
-                      ];
-                      const idx = e.target.selectedIndex;
-                      if (idx > 0) {
-                        const t = templates[idx];
-                        setPrescNotes(t.notes);
-                        setPrescMedicines(t.prescription);
-                      }
-                    }}
-                  >
-                    <option value="">-- Choose Diagnosis Template --</option>
-                    <option value="fever">{t('tmpl_fever')}</option>
-                    <option value="cold">{t('tmpl_cold')}</option>
-                    <option value="acidity">{t('tmpl_acidity')}</option>
-                    <option value="loose_motion">{t('tmpl_stomach')}</option>
-                  </select>
-                </div>
-              )}
-              <div className="form-group">
-                <label>{t('lbl_clinical_notes')}</label>
-                <textarea 
-                  className="form-control" 
-                  rows="3" 
-                  placeholder="Advised medications and rest." 
-                  value={prescNotes} 
-                  onChange={e => setPrescNotes(e.target.value)}
-                  required
-                  readOnly={prescIsViewMode}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>{t('lbl_presc_meds')}</label>
-                <textarea 
-                  className="form-control" 
-                  rows="4" 
-                  placeholder="Paracetamol 650mg - twice daily for 3 days." 
-                  value={prescMedicines} 
-                  onChange={e => setPrescMedicines(e.target.value)}
-                  required
-                  readOnly={prescIsViewMode}
-                />
-              </div>
-
-              <div className="form-group" style={{ maxWidth: '250px' }}>
-                <label>Follow-up Date (optional)</label>
-                <input 
-                  type="date" 
-                  className="form-control" 
-                  value={prescFollowUp} 
-                  onChange={e => setPrescFollowUp(e.target.value)} 
-                  readOnly={prescIsViewMode}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-                {prescIsViewMode && (
-                  <button type="button" onClick={() => window.print()} className="btn btn-secondary">
-                    🖨️ Print Prescription
-                  </button>
-                )}
-                <button type="button" onClick={() => setPrescriptionModalOpen(false)} className="btn btn-secondary">Close</button>
-                {!prescIsViewMode && (
-                  <button type="submit" className="btn btn-primary">Complete & Send to Patient</button>
-                )}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <PrescriptionModal
+        isOpen={prescriptionModalOpen}
+        onClose={() => setPrescriptionModalOpen(false)}
+        appointment={prescAppointment}
+        isViewMode={prescIsViewMode}
+        prescNotes={prescNotes}
+        setPrescNotes={setPrescNotes}
+        prescMedicines={prescMedicines}
+        setPrescMedicines={setPrescMedicines}
+        prescFollowUp={prescFollowUp}
+        setPrescFollowUp={setPrescFollowUp}
+        onComplete={handleCompleteConsultation}
+        t={t}
+      />
 
       {/* B. Reschedule Modal */}
-      {rescheduleModalOpen && targetAppointment && (
-        <div className="modal-overlay" style={{ backdropFilter: 'blur(8px)', zIndex: 9999 }}>
-          <div className="modal-content" style={{ maxWidth: '560px', width: '92%', background: '#FFFFFF', borderRadius: '20px', padding: '24px', border: '1px solid #E2E8F0', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h3 style={{ color: '#0F172A', margin: 0, fontWeight: 800, fontSize: '18px' }}>
-                🔄 Reschedule Appointment
-              </h3>
-              <button onClick={() => setRescheduleModalOpen(false)} style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '20px', cursor: 'pointer', padding: '2px 6px' }}>✕</button>
-            </div>
-
-            <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '12px 14px', marginBottom: '16px', fontSize: '12px', color: '#334155' }}>
-              <div>👤 <strong>Patient:</strong> {targetAppointment.patient_name}</div>
-              <div style={{ marginTop: '3px' }}>👨‍⚕️ <strong>Doctor:</strong> {targetAppointment.doctor_name} ({targetAppointment.department_name})</div>
-              <div style={{ marginTop: '3px', color: '#B45309', fontWeight: 600 }}>ℹ️ Authority: Allowed 1-Time only (Strictly within the next 2 days).</div>
-            </div>
-
-            {rescheduleError && (
-              <div style={{ color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', padding: '10px 14px', borderRadius: '10px', marginBottom: '14px', fontSize: '12px', fontWeight: 600 }}>
-                ⚠️ {rescheduleError}
-              </div>
-            )}
-            
-            <div className="form-group" style={{ marginBottom: '16px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px', display: 'block' }}>
-                📅 Select Date (Next 2 Days Only)
-              </label>
-              <input 
-                type="date" 
-                className="form-control" 
-                value={rescheduleDate}
-                min={new Date().toISOString().split('T')[0]}
-                max={new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString().split('T')[0]}
-                onChange={e => handleDateChangeForReschedule(e.target.value)}
-                style={{ padding: '10px 12px', fontSize: '13px', borderRadius: '10px', background: '#F8FAFC', border: '1.5px solid #CBD5E1', width: '100%' }}
-              />
-            </div>
-
-            {rescheduleDate && (
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '8px', display: 'block' }}>
-                  ⏰ Select Available Time Slot:
-                </label>
-                <div>
-                  {(() => {
-                    if (allSlots.length === 0) {
-                      const onLeave = leavesList.find(l => l.doctor_id === targetAppointment.doctor_id && l.status === 'APPROVED' && new Date(l.start_date) <= new Date(rescheduleDate) && new Date(l.end_date) >= new Date(rescheduleDate));
-                      if (onLeave) {
-                        const sd = new Date(onLeave.start_date).toLocaleDateString('hi-IN', {day: 'numeric', month: 'short'});
-                        const ed = new Date(onLeave.end_date).toLocaleDateString('hi-IN', {day: 'numeric', month: 'short'});
-                        return (
-                          <div style={{ textAlign: 'center', padding: '15px', color: '#DC2626', background: '#FEF2F2', borderRadius: '10px', border: '1px solid #FECACA', fontSize: '12px' }}>
-                            <strong>{t('doc_on_leave_banner')}</strong><br />
-                            <span style={{ marginTop: '4px', display: 'inline-block' }}>Doctor is on approved leave from {sd} to {ed}.</span>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div style={{ textAlign: 'center', padding: '15px', color: '#64748B', background: '#F8FAFC', borderRadius: '10px', border: '1px solid #E2E8F0', fontSize: '12px', fontStyle: 'italic' }}>
-                          No active OPD schedule found for this doctor on selected date.
-                        </div>
-                      );
-                    }
-                    return (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(95px, 1fr))', gap: '8px', maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
-                        {allSlots.map(time => {
-                          const isBusy = bookedSlots.includes(time);
-                          const isSelected = selectedSlotTime === time;
-                          return (
-                            <button 
-                              type="button"
-                              key={time} 
-                              disabled={isBusy}
-                              onClick={() => {
-                                if (!isBusy) setSelectedSlotTime(time);
-                              }}
-                              style={{
-                                padding: '9px 6px',
-                                borderRadius: '10px',
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                cursor: isBusy ? 'not-allowed' : 'pointer',
-                                transition: 'all 0.15s ease',
-                                border: isSelected
-                                  ? '2px solid #2563EB'
-                                  : isBusy
-                                  ? '1px solid #FECACA'
-                                  : '1.5px solid #CBD5E1',
-                                background: isSelected
-                                  ? '#2563EB'
-                                  : isBusy
-                                  ? '#FEF2F2'
-                                  : '#FFFFFF',
-                                color: isSelected
-                                  ? '#FFFFFF'
-                                  : isBusy
-                                  ? '#EF4444'
-                                  : '#1E293B',
-                                boxShadow: isSelected ? '0 4px 10px rgba(37,99,235,0.25)' : 'none',
-                                textAlign: 'center'
-                              }}
-                            >
-                              {time}
-                              {isBusy && <span style={{ display: 'block', fontSize: '8px', fontWeight: 600, color: '#EF4444' }}>Booked</span>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px', borderTop: '1px solid #E2E8F0', paddingTop: '16px' }}>
-              <button type="button" onClick={() => setRescheduleModalOpen(false)} style={{ background: '#F1F5F9', border: '1px solid #CBD5E1', color: '#334155', borderRadius: '10px', padding: '9px 18px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
-              <button 
-                type="button"
-                disabled={!rescheduleDate || !selectedSlotTime}
-                onClick={executeReschedule} 
-                style={{
-                  background: (!rescheduleDate || !selectedSlotTime) ? '#94A3B8' : 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
-                  border: 'none',
-                  color: '#FFFFFF',
-                  borderRadius: '10px',
-                  padding: '9px 20px',
-                  fontSize: '13px',
-                  fontWeight: 800,
-                  cursor: (!rescheduleDate || !selectedSlotTime) ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 4px 12px rgba(37,99,235,0.25)'
-                }}
-              >
-                Confirm Reschedule
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RescheduleModal
+        isOpen={rescheduleModalOpen}
+        onClose={() => setRescheduleModalOpen(false)}
+        appointment={targetAppointment}
+        rescheduleDate={rescheduleDate}
+        onDateChange={handleDateChangeForReschedule}
+        allSlots={allSlots}
+        bookedSlots={bookedSlots}
+        selectedSlotTime={selectedSlotTime}
+        onSelectSlot={setSelectedSlotTime}
+        leavesList={leavesList}
+        rescheduleError={rescheduleError}
+        onConfirm={executeReschedule}
+        t={t}
+      />
 
       {/* Edit Doctor Modal */}
       {editDoctorModalOpen && (
@@ -5377,33 +4905,14 @@ function App() {
       )}
 
       {/* C. Cancel Modal */}
-      {cancelModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h3 style={{ color: 'var(--text-main)', marginBottom: '15px' }}>Cancel Appointment</h3>
-            <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '15px' }}>
-              Are you sure you want to cancel? {cancelIsPaid && <span style={{ color: '#f59e0b' }}>Note: This is a PAID appointment. Refund will be initiated.</span>}
-            </p>
-            
-            <div className="form-group" style={{ marginBottom: '15px' }}>
-              <label>Reason for Cancellation (for WhatsApp alert)</label>
-              <textarea 
-                className="form-control" 
-                rows="3" 
-                placeholder="Reason..."
-                value={cancelReason}
-                onChange={e => setCancelReason(e.target.value)}
-                required
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setCancelModalOpen(false)} className="btn btn-secondary">Discard</button>
-              <button onClick={executeCancellation} className="btn btn-danger">Confirm Cancel & Refund</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <CancelAppointmentModal
+        isOpen={cancelModalOpen}
+        onClose={() => setCancelModalOpen(false)}
+        isPaid={cancelIsPaid}
+        cancelReason={cancelReason}
+        setCancelReason={setCancelReason}
+        onConfirm={executeCancellation}
+      />
 
       {/* D. Patient Profile & Appointments History Modal */}
       {selectedPatientRecord && (
@@ -5537,197 +5046,17 @@ function App() {
       )}
 
       {/* ── INTERACTIVE PLAN RENEWAL & UPGRADE MODAL ── */}
-      {showUpgradeModal && (() => {
-        const currentActivePlan = activeHospital?.subscription_plan || hospitalStats?.subscription_plan || 'PRO';
-        const isEnterprise = currentActivePlan === 'ENTERPRISE';
-        const isStarter = currentActivePlan === 'STARTER';
-        const isPro = currentActivePlan === 'PRO';
-
-        const starterPlan = plansList.find(p => p.plan_code === 'STARTER');
-        const proPlan = plansList.find(p => p.plan_code === 'PRO');
-        const enterprisePlan = plansList.find(p => p.plan_code === 'ENTERPRISE');
-
-        const starterPrice = starterPlan ? Number(starterPlan.price_inr) : 1500;
-        const proPrice = proPlan ? Number(proPlan.price_inr) : 2999;
-        const enterprisePrice = enterprisePlan ? Number(enterprisePlan.price_inr) : 29999;
-
-        return (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-          <div className="animate-modal-pop" style={{ background: '#FFFFFF', borderRadius: '24px', width: '100%', maxWidth: '780px', padding: '32px', boxShadow: '0 25px 60px -15px rgba(15, 23, 42, 0.3)', border: '1.5px solid #DBEAFE', textAlign: 'left' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F1F5F9', paddingBottom: '16px', marginBottom: '16px' }}>
-              <div>
-                <h3 style={{ fontSize: '20px', fontWeight: 900, color: '#0F172A', margin: 0 }}>
-                  ⚡ {lang === 'hi' ? 'सब्सक्रिप्शन एवं प्लान प्रबंधन' : 'Subscription & Plan Management'}
-                </h3>
-                <div style={{ fontSize: '12px', color: '#64748B', fontWeight: 600, marginTop: '2px' }}>
-                  {lang === 'hi' ? 'वर्तमान सक्रिय प्लान:' : 'Current Active Plan:'} <strong style={{ color: isEnterprise ? '#7E22CE' : (isPro ? '#2563EB' : '#D97706') }}>
-                    {isEnterprise ? '👑 ENTERPRISE 360' : (isPro ? '⚡ PRO AI PLAN' : '⭐ STARTER (15-Day Trial)')}
-                  </strong> • {activeHospital?.days_left !== undefined ? `${activeHospital.days_left} ${lang === 'hi' ? 'दिन शेष' : 'Days Left'}` : ''}
-                </div>
-              </div>
-              <button onClick={() => setShowUpgradeModal(false)} style={{ background: '#F1F5F9', border: 'none', width: '32px', height: '32px', borderRadius: '50%', fontSize: '16px', cursor: 'pointer', color: '#64748B', fontWeight: 800 }}>✕</button>
-            </div>
-
-            <div style={{
-              background: activeHospital?.is_expired ? '#FEF2F2' : (activeHospital?.days_left <= 7 ? '#FFFBEB' : '#F0FDF4'),
-              border: `1.5px solid ${activeHospital?.is_expired ? '#FECACA' : (activeHospital?.days_left <= 7 ? '#FDE68A' : '#BBF7D0')}`,
-              borderRadius: '12px', padding: '12px 16px', marginBottom: '20px',
-              color: activeHospital?.is_expired ? '#991B1B' : (activeHospital?.days_left <= 7 ? '#92400E' : '#166534'),
-              fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px'
-            }}>
-              <span>{activeHospital?.is_expired ? '🚨' : (activeHospital?.days_left <= 7 ? '⚠️' : '✓')}</span>
-              <span>
-                {activeHospital?.is_expired
-                  ? (lang === 'hi' ? 'आपका प्लान समाप्त हो चुका है। सेवाओं को तुरंत सक्रिय करने के लिए नीचे दिए गए प्लान का चयन करें।' : 'Your subscription has expired. Please select a plan below to reactivate all services.')
-                  : (lang === 'hi' ? 'प्लान समाप्ति से पहले रिन्यू या अपग्रेड करें ताकि AI रिसेप्शनिस्ट और व्हाट्सएप सेवाएं बिना रुकावट चलती रहें।' : 'Renew or upgrade before expiration to maintain uninterrupted 24/7 AI Voice reception and doctor operations.')}
-              </span>
-            </div>
-
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: isStarter ? 'repeat(auto-fit, minmax(220px, 1fr))' : (isEnterprise ? '1fr' : '1fr 1fr'),
-              gap: '16px',
-              marginBottom: '20px'
-            }}>
-              {/* Option 1: Starter Renewal (Only shown for Starter Hospitals) */}
-              {isStarter && (
-                <div 
-                  style={{
-                    background: '#F8FAFC',
-                    border: '2px solid #CBD5E1',
-                    borderRadius: '18px', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                    boxShadow: '0 4px 14px rgba(15, 23, 42, 0.04)'
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 800, color: '#334155' }}>
-                        🥉 {lang === 'hi' ? 'स्टार्टर रिन्यूअल' : 'Starter Renewal'}
-                      </span>
-                      <span style={{ background: '#F1F5F9', color: '#475569', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 800 }}>
-                        +30 Days
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '22px', fontWeight: 900, color: '#0F172A', margin: '8px 0 4px 0' }}>
-                      ₹{starterPrice.toLocaleString()} <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>/ month</span>
-                    </div>
-                    <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 16px 0', fontSize: '11px', color: '#475569', display: 'flex', flexDirection: 'column', gap: '6px', fontWeight: 600 }}>
-                      <li>✓ 👨‍⚕️ <strong>{starterPlan?.max_doctors || 1} {lang === 'hi' ? 'डॉक्टर प्रोफाइल' : 'Doctor Profile'}</strong></li>
-                      <li>✓ 🖥️ {lang === 'hi' ? 'रिसेप्शनिस्ट वर्कस्पेस' : 'Receptionist Portal'}</li>
-                      <li>✓ 📱 {lang === 'hi' ? 'ऑनलाइन बुकिंग' : 'Online Booking'}</li>
-                      <li>❌ 🔒 <strong>{lang === 'hi' ? 'AI वॉइस हेल्पलाइन बंद' : 'AI Voice Helpline Locked'}</strong></li>
-                    </ul>
-                  </div>
-                  <button
-                    onClick={() => handleRazorpayRenewPlan(hospitalId)}
-                    style={{
-                      width: '100%', padding: '12px', borderRadius: '10px', border: '1.5px solid #CBD5E1',
-                      background: '#FFFFFF', color: '#0F172A', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-                      boxShadow: '0 2px 8px rgba(15,23,42,0.05)'
-                    }}
-                  >
-                    {lang === 'hi' ? `स्टार्टर रिन्यू करें (₹${starterPrice.toLocaleString()})` : `Renew Starter (₹${starterPrice.toLocaleString()}) →`}
-                  </button>
-                </div>
-              )}
-
-              {/* Option 2: Pro AI Plan (Upgrade or Renew) */}
-              <div 
-                style={{
-                  background: '#F0FDF4',
-                  border: '2.5px solid #2563EB',
-                  borderRadius: '18px', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                  boxShadow: '0 8px 24px rgba(37, 99, 235, 0.12)', position: 'relative'
-                }}
-              >
-                {isStarter && (
-                  <span style={{ position: 'absolute', top: '-12px', right: '16px', background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)', color: '#FFFFFF', fontSize: '10px', fontWeight: 800, padding: '3px 10px', borderRadius: '12px' }}>
-                    RECOMMENDED
-                  </span>
-                )}
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: '14px', fontWeight: 800, color: '#2563EB' }}>
-                      {isStarter ? '⚡ PRO AI PLAN' : (isEnterprise ? '🔄 Renew Enterprise' : '🔄 Renew PRO Plan')}
-                    </span>
-                    <span style={{ background: '#DBEAFE', color: '#1E40AF', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 800 }}>
-                      +{isEnterprise ? '365' : '30'} Days
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '22px', fontWeight: 900, color: '#0F172A', margin: '8px 0 4px 0' }}>
-                    ₹{isEnterprise ? enterprisePrice.toLocaleString() : proPrice.toLocaleString()} <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>{isEnterprise ? '/ year' : '/ month'}</span>
-                  </div>
-                  <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 16px 0', fontSize: '11px', color: '#334155', display: 'flex', flexDirection: 'column', gap: '6px', fontWeight: 600 }}>
-                    <li>✓ 📞 <strong>{lang === 'hi' ? '24/7 AI वॉइस रिसेप्शनिस्ट' : '24/7 AI Voice Receptionist'}</strong></li>
-                    <li>✓ 👨‍⚕️ <strong>{isEnterprise ? 'Unlimited' : (proPlan?.max_doctors || '5')} {lang === 'hi' ? 'डॉक्टर क्षमता' : 'Doctors Capacity'}</strong></li>
-                    <li>✓ 💬 <strong>{lang === 'hi' ? 'व्हाट्सएप ऑटोमेशन' : 'WhatsApp Automation'}</strong></li>
-                    <li>✓ 💳 <strong>{lang === 'hi' ? 'ऑनलाइन OPD पेमेंट' : 'Online OPD Payments'}</strong></li>
-                  </ul>
-                </div>
-                <button
-                  onClick={() => {
-                    if (isStarter) {
-                      handleRazorpayUpgradePlan(hospitalId, 'PRO');
-                    } else {
-                      handleRazorpayRenewPlan(hospitalId);
-                    }
-                  }}
-                  style={{
-                    width: '100%', padding: '12px', borderRadius: '10px', border: 'none',
-                    background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
-                    color: '#FFFFFF', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-                    boxShadow: '0 4px 12px rgba(37,99,235,0.3)'
-                  }}
-                >
-                  {isStarter ? `Upgrade to Pro (₹${proPrice.toLocaleString()}) →` : `Pay & Renew (₹${isEnterprise ? enterprisePrice.toLocaleString() : proPrice.toLocaleString()}) →`}
-                </button>
-              </div>
-
-              {/* Option 3: Upgrade to Enterprise 360 */}
-              {!isEnterprise && (
-                <div 
-                  style={{
-                    background: '#FAF5FF',
-                    border: '2px solid #7E22CE',
-                    borderRadius: '18px', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                    boxShadow: '0 4px 14px rgba(126, 34, 206, 0.08)'
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 800, color: '#7E22CE' }}>👑 ENTERPRISE 360</span>
-                      <span style={{ background: '#F3E8FF', color: '#6B21A8', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 800 }}>
-                        +365 Days
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '22px', fontWeight: 900, color: '#0F172A', margin: '8px 0 4px 0' }}>
-                      ₹{enterprisePrice.toLocaleString()} <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 600 }}>/ year</span>
-                    </div>
-                    <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 16px 0', fontSize: '11px', color: '#334155', display: 'flex', flexDirection: 'column', gap: '6px', fontWeight: 600 }}>
-                      <li>✓ 👨‍⚕️ <strong>{lang === 'hi' ? 'असीमित डॉक्टर्स (Unlimited)' : 'Unlimited Doctors'}</strong></li>
-                      <li>✓ ⚡ <strong>{lang === 'hi' ? 'प्राथमिकता AI वॉइस रूटिंग' : 'Priority AI Voice Routing'}</strong></li>
-                      <li>✓ 🎨 <strong>{lang === 'hi' ? 'कस्टम डोमेन एवं ब्रांडिंग' : 'Custom Domain & Branding'}</strong></li>
-                      <li>✓ 🛡️ <strong>{lang === 'hi' ? '99.99% SRE अपटाइम गारंटी' : '99.99% SRE Uptime SLA'}</strong></li>
-                    </ul>
-                  </div>
-                  <button
-                    onClick={() => handleRazorpayUpgradePlan(hospitalId, 'ENTERPRISE')}
-                    style={{
-                      width: '100%', padding: '12px', borderRadius: '10px', border: 'none',
-                      background: 'linear-gradient(135deg, #7E22CE 0%, #6B21A8 100%)',
-                      color: '#FFFFFF', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-                      boxShadow: '0 4px 12px rgba(126,34,206,0.25)'
-                    }}
-                  >
-                    Upgrade Enterprise (₹{enterprisePrice.toLocaleString()}) →
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        );
-      })()}
+      <UpgradeSubscriptionModal
+        isOpen={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+        activeHospital={activeHospital}
+        hospitalStats={hospitalStats}
+        plansList={plansList}
+        hospitalId={hospitalId}
+        onRenewPlan={handleRazorpayRenewPlan}
+        onUpgradePlan={handleRazorpayUpgradePlan}
+        lang={lang}
+      />
 
       {/* Universal Profile & Self-Password Management Modal */}
       <ProfileModal

@@ -66,11 +66,10 @@ def create_app() -> FastAPI:
     # 2. Register custom application exceptions mapping handlers
     register_exception_handlers(app)
 
-    # 3. Import and include API routers with /api/v1 prefix and root fallback
+    # 3. Import and include API routers with standard /api/v1 prefix
     from app.api.v1.router import api_router
     
     app.include_router(api_router, prefix=settings.API_V1_STR)
-    app.include_router(api_router)
 
 
     # 4. Root Health Check Endpoint

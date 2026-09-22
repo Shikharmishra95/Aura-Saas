@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Form
 from sqlalchemy import select, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_db
@@ -23,16 +24,40 @@ async def update_appointment_status(
     new_datetime: Optional[str] = Form(None, description="ISO datetime for RESCHEDULED status"),
     cutoff_note: Optional[str] = Form(None, description="Arrival cutoff instruction for patient"),
     cancellation_reason: Optional[str] = Form(None, description="Reason for cancellation (for refund WhatsApp)"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Receptionist action endpoint to update appointment status.
+    Hospital staff action endpoint to update appointment status.
+    Protected: Requires authenticated staff (RECEPTIONIST, ADMIN, DOCTOR) or SUPER_ADMIN.
+    Enforces strict tenant isolation: non-superadmin callers cannot modify appointments of other hospitals.
     On RESCHEDULED, updates time and sends WhatsApp to patient.
     """
+    # 1. Enforce RBAC: staff or superadmin
+    role_stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
+    roles = set((await db.execute(role_stmt)).scalars().all())
+
+    is_super_admin = "SUPER_ADMIN" in roles or current_user.hospital_id == "super_admin"
+    is_staff = bool(roles.intersection({"RECEPTIONIST", "ADMIN", "DOCTOR"}))
+
+    if not is_super_admin and not is_staff:
+        raise HTTPException(
+            status_code=403,
+            detail="Unauthorized: Only hospital staff (Doctor, Receptionist, Admin) or SuperAdmin can update appointment status."
+        )
+
+    # 2. Lookup appointment
     stmt = select(Appointment).where(Appointment.id == appointment_id)
     appointment = (await db.execute(stmt)).scalar_one_or_none()
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found.")
+
+    # 3. Enforce tenant isolation
+    if not is_super_admin and appointment.hospital_id != current_user.hospital_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Cannot modify appointment belonging to another hospital."
+        )
 
     old_status = appointment.status
 
@@ -71,17 +96,24 @@ async def update_appointment_status(
         appointment_id=appointment.id,
         previous_status=old_status,
         new_status=new_status,
-        change_reason=f"Receptionist action: {new_status}"
+        changed_by_user_id=current_user.id,
+        change_reason=f"Status updated to {new_status} by {current_user.username}"
     )
     db.add(history)
-    await db.flush()
-
-    patient_stmt = select(Patient).where(Patient.id == appointment.patient_id)
-    patient = (await db.execute(patient_stmt)).scalar_one_or_none()
-    doctor_stmt = select(Doctor).where(Doctor.id == appointment.doctor_id)
-    doctor = (await db.execute(doctor_stmt)).scalar_one_or_none()
-
-    await db.commit()
+    try:
+        await db.flush()
+        patient_stmt = select(Patient).where(Patient.id == appointment.patient_id)
+        patient = (await db.execute(patient_stmt)).scalar_one_or_none()
+        doctor_stmt = select(Doctor).where(Doctor.id == appointment.doctor_id)
+        doctor = (await db.execute(doctor_stmt)).scalar_one_or_none()
+        await db.commit()
+    except IntegrityError as ie:
+        await db.rollback()
+        logger.warning(f"Reschedule conflict prevented by unique constraint in doctor_queue: {ie}")
+        raise HTTPException(
+            status_code=400,
+            detail="The selected time slot is already booked for this doctor. Please choose another slot."
+        )
 
     if new_status == "RESCHEDULED" and patient and new_datetime:
         wa_service = WhatsAppNotificationService()

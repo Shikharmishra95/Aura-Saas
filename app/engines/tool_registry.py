@@ -51,6 +51,10 @@ class DynamicToolRegistry:
 
     def register(self, metadata: ToolMetadata, handler: Callable):
         """Registers a tool with its metadata, intent signatures, and execution handler."""
+        if metadata.tool_name in self._tools:
+            logger.warning(f"Duplicate tool registration skipped: '{metadata.tool_name}'")
+            return
+
         self._tools[metadata.tool_name] = metadata
         self._tool_handlers[metadata.tool_name] = handler
         
@@ -705,21 +709,25 @@ class DynamicToolRegistry:
             )
         )
 
-        # 15. get_doctor_daily_earnings (Doctor Personal)
+        # 15. get_doctor_daily_earnings (Doctor Personal / Admin)
         self.register(
             ToolMetadata(
                 tool_name="get_doctor_daily_earnings",
                 domain="finance",
-                description="Get personal daily OPD earnings and completed consultation count for a doctor.",
+                description="Get personal daily OPD earnings, consultation count, and revenue for a doctor for today, this week, month, or all time.",
                 parameters={
                     "type": "OBJECT",
                     "properties": {
                         "doctor_name": {"type": "STRING", "description": "Doctor name"},
-                        "date_str": {"type": "STRING", "description": "Date YYYY-MM-DD"}
+                        "date_str": {"type": "STRING", "description": "Date YYYY-MM-DD"},
+                        "time_range": {"type": "STRING", "description": "'today', 'week', 'month', or 'all'"}
                     }
                 },
-                intent_examples=["what are my opd earnings today", "meri aaj ki kamai", "doctor opd earnings", "how much i earned today"],
-                required_roles=["DOCTOR", "ADMIN", "SUPER_ADMIN"],
+                intent_examples=[
+                    "what are my opd earnings today", "meri aaj ki kamai", "doctor opd earnings",
+                    "how much i earned today", "my total appointment and total earning of all time", "today's consulted patients"
+                ],
+                required_roles=["DOCTOR", "ADMIN", "SUPER_ADMIN", "SUPERADMIN"],
                 risk_level="READ_ONLY"
             ),
             handler=lambda args, context, db: CopilotTools.get_doctor_daily_earnings(
@@ -727,6 +735,7 @@ class DynamicToolRegistry:
                 user_id=context.get("user_id"),
                 doctor_name=args.get("doctor_name"),
                 date_str=args.get("date_str"),
+                time_range=args.get("time_range", "today"),
                 db=db
             )
         )
@@ -1176,33 +1185,7 @@ class DynamicToolRegistry:
             )
         )
 
-        # 31. get_comprehensive_doctor_analytics (Admin / Doctor)
-        self.register(
-            ToolMetadata(
-                tool_name="get_comprehensive_doctor_analytics",
-                domain="admin",
-                description="Comprehensive department & weekly doctor schedule matrix, working days, and revenue analytics.",
-                parameters={
-                    "type": "OBJECT",
-                    "properties": {
-                        "time_range": {"type": "STRING", "description": "'today', 'week', 'month', or 'all'"}
-                    }
-                },
-                intent_examples=[
-                    "doctor schedule of this week", "which departments doctors exist", "total working days of doctors",
-                    "departments directory", "doctor working days"
-                ],
-                required_roles=["ADMIN", "SUPER_ADMIN", "DOCTOR", "RECEPTIONIST", "ALL"],
-                risk_level="READ_ONLY"
-            ),
-            handler=lambda args, context, db: CopilotTools.get_comprehensive_doctor_analytics(
-                hospital_id=context.get("hospital_id"),
-                time_range=args.get("time_range", "all"),
-                db=db
-            )
-        )
-
-        # 32. get_hospital_department_directory (All)
+        # 31. get_hospital_department_directory (All)
         self.register(
             ToolMetadata(
                 tool_name="get_hospital_department_directory",
@@ -1220,82 +1203,6 @@ class DynamicToolRegistry:
             ),
             handler=lambda args, context, db: CopilotTools.get_hospital_department_directory(
                 hospital_id=context.get("hospital_id"),
-                db=db
-            )
-        )
-
-        # 33. get_revenue_and_dues (Admin / SuperAdmin)
-        self.register(
-            ToolMetadata(
-                tool_name="get_revenue_and_dues",
-                domain="finance",
-                description="Financial OPD revenue, total collections, and pending dues for today, this month, or all time.",
-                parameters={
-                    "type": "OBJECT",
-                    "properties": {
-                        "time_range": {"type": "STRING", "description": "'today', 'week', 'month', or 'all'"}
-                    }
-                },
-                intent_examples=[
-                    "all time pending collection dues", "total revenue of all time", "pending dues summary", "revenue today"
-                ],
-                required_roles=["ADMIN", "SUPER_ADMIN", "SUPERADMIN"],
-                risk_level="READ_ONLY"
-            ),
-            handler=lambda args, context, db: CopilotTools.get_revenue_and_dues(
-                hospital_id=context.get("hospital_id"),
-                time_range=args.get("time_range", "today"),
-                db=db
-            )
-        )
-
-        # 34. get_doctor_daily_earnings (Doctor / Admin)
-        self.register(
-            ToolMetadata(
-                tool_name="get_doctor_daily_earnings",
-                domain="doctor",
-                description="Doctor personal consultations, earnings, and patient load for today, month, or all time.",
-                parameters={
-                    "type": "OBJECT",
-                    "properties": {
-                        "date_str": {"type": "STRING", "description": "Date YYYY-MM-DD"},
-                        "time_range": {"type": "STRING", "description": "'today', 'week', 'month', or 'all'"},
-                        "doctor_name": {"type": "STRING", "description": "Doctor name"}
-                    }
-                },
-                intent_examples=[
-                    "my total appointment and total earning of all time", "today's consulted patients", "my earnings", "opd earnings today"
-                ],
-                required_roles=["DOCTOR", "ADMIN", "SUPER_ADMIN", "SUPERADMIN"],
-                risk_level="READ_ONLY"
-            ),
-            handler=lambda args, context, db: CopilotTools.get_doctor_daily_earnings(
-                hospital_id=context.get("hospital_id"),
-                user_id=context.get("user_id"),
-                doctor_name=args.get("doctor_name"),
-                date_str=args.get("date_str"),
-                time_range=args.get("time_range", "today"),
-                db=db
-            )
-        )
-
-        # 35. get_platform_control_tower_overview (SuperAdmin)
-        self.register(
-            ToolMetadata(
-                tool_name="get_platform_control_tower_overview",
-                domain="control_tower",
-                description="Global multi-tenant platform control tower overview across all hospitals, subscriptions, and AI voice telemetry.",
-                parameters={
-                    "type": "OBJECT",
-                    "properties": {}
-                },
-                intent_examples=[
-                    "how many hospitals are active", "platform revenue overview", "expiring subscriptions", "voice telemetry"
-                ],
-                required_roles=["SUPER_ADMIN"],
-                risk_level="READ_ONLY"
-            ),
-            handler=lambda args, context, db: CopilotTools.get_platform_control_tower_overview(
                 db=db
             )
         )
@@ -1383,30 +1290,6 @@ class DynamicToolRegistry:
             }
         )
 
-        # 38. search_platform_hospital (SuperAdmin)
-        self.register(
-            ToolMetadata(
-                tool_name="search_platform_hospital",
-                domain="control_tower",
-                description="Global platform hospital lookup for SuperAdmin across all tenant hospitals (contact details, phone, address, plan, doctor count).",
-                parameters={
-                    "type": "OBJECT",
-                    "properties": {
-                        "query": {"type": "STRING", "description": "Hospital name, slug, id, or location to search"}
-                    },
-                    "required": ["query"]
-                },
-                intent_examples=[
-                    "balaji hospital ka number do mujhe", "search hospital alpha-medical", "hospital contact info", "hospital details", "balaji hospital info"
-                ],
-                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
-                risk_level="READ_ONLY"
-            ),
-            handler=lambda args, context, db: ControlTowerTools.search_platform_hospital(
-                query=args.get("query", ""),
-                db=db
-            )
-        )
 
         # 39. get_doctor_metrics
         self.register(

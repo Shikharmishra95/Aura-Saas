@@ -378,7 +378,7 @@ class EntityExtractor:
             clean_words = [w for w in words if w.lower() not in stop_words]
             if clean_words:
                 clean_name = " ".join(clean_words).strip()
-                if len(clean_name) >= 3 and clean_name.lower() not in stop_words:
+                if len(clean_name) >= 2 and clean_name.lower() not in stop_words:
                     return f"Dr. {clean_name.title()}" if not clean_name.lower().startswith("dr") else clean_name.title()
         return None
 

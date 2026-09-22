@@ -11,8 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_db
+from app.core.dependencies import get_current_user
 from app.core.config import settings
 from app.core.logging import logger
+from app.database.models.call_log import User, Role, UserRole
 from app.database.models.appointment import Appointment, Patient, Doctor, Department, Hospital, AppointmentStatusHistory
 
 router = APIRouter(tags=["payment"])
@@ -167,23 +169,47 @@ async def verify_razorpay_payment(
 @router.post("/payment/confirm/{appointment_id}", tags=["payment"])
 async def payment_confirmation_webhook(
     appointment_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Simulated / test payment confirmation fallback.
-    Updates appointment status to SCHEDULED and dispatches WhatsApp notification.
+    Confirms counter / manual cash payment for an appointment.
+    Protected: Requires authenticated staff (RECEPTIONIST, ADMIN) or SUPER_ADMIN.
+    Enforces tenant isolation: staff cannot confirm payments for other hospitals.
+    Updates appointment payment status to PAID and dispatches WhatsApp notification.
     """
     from app.services.whatsapp import WhatsAppNotificationService
 
+    # 1. Enforce RBAC
+    role_stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
+    roles = set((await db.execute(role_stmt)).scalars().all())
+
+    is_super_admin = "SUPER_ADMIN" in roles or current_user.hospital_id == "super_admin"
+    is_authorized_staff = bool(roles.intersection({"RECEPTIONIST", "ADMIN"}))
+
+    if not is_super_admin and not is_authorized_staff:
+        raise HTTPException(
+            status_code=403,
+            detail="Unauthorized: Only Receptionist, Hospital Admin, or SuperAdmin can confirm counter payments."
+        )
+
+    # 2. Lookup appointment
+    stmt = select(Appointment).where(Appointment.id == appointment_id)
+    appointment = (await db.execute(stmt)).scalar_one_or_none()
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+
+    # 3. Enforce tenant isolation
+    if not is_super_admin and appointment.hospital_id != current_user.hospital_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Cannot confirm payment for an appointment belonging to another hospital."
+        )
+
+    if appointment.status == "SCHEDULED" and appointment.payment_status == "PAID":
+        return {"success": True, "message": "Already confirmed", "phone": "N/A"}
+
     try:
-        stmt = select(Appointment).where(Appointment.id == appointment_id)
-        appointment = (await db.execute(stmt)).scalar_one_or_none()
-        if not appointment:
-            raise HTTPException(status_code=404, detail="Appointment not found.")
-
-        if appointment.status == "SCHEDULED":
-            return {"success": True, "message": "Already confirmed", "phone": "N/A"}
-
         old_status = appointment.status
         appointment.payment_status = "PAID"
         if appointment.status == "PENDING_PAYMENT":
@@ -194,8 +220,9 @@ async def payment_confirmation_webhook(
             id=str(uuid.uuid4()),
             appointment_id=appointment.id,
             previous_status=old_status,
-            new_status="SCHEDULED",
-            change_reason="Payment confirmed successfully via online portal"
+            new_status="SCHEDULED" if appointment.status == "SCHEDULED" else old_status,
+            changed_by_user_id=current_user.id,
+            change_reason=f"Counter payment confirmed by {current_user.username}"
         )
         db.add(status_history)
         await db.flush()

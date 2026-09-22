@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, time
 from sqlalchemy import select, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models.appointment import Appointment, AppointmentStatusHistory, Patient, Doctor
 from app.engines.scheduling import SchedulingEngine
@@ -191,7 +192,16 @@ class AppointmentEngine:
                 "message": "Appointment booked successfully."
             }
 
+        except IntegrityError as ie:
+            await self.db.rollback()
+            engine_logger.warning(f"IntegrityError prevented concurrent double-booking: {ie}")
+            return {
+                "code": "SLOT_FULL",
+                "message": f"The slot at {appointment_datetime.strftime('%I:%M %p')} on {appt_date} was just reserved by another patient.",
+                "nearest_slot": nearest_slot_str if 'nearest_slot_str' in locals() else "कृपया अन्य स्लॉट चुनें"
+            }
         except Exception as e:
+            await self.db.rollback()
             engine_logger.error(f"Unexpected error in book_appointment: {str(e)}", exc_info=True)
             return {"code": "ERROR", "message": str(e)}
 
@@ -221,6 +231,7 @@ class AppointmentEngine:
 
             # 3. Update Status
             appointment.status = "CANCELLED"
+            appointment.active_slot_token = None
             await self.db.flush()
             await self.db.refresh(appointment)
 
@@ -307,6 +318,7 @@ class AppointmentEngine:
             # 4. Update Datetime and status
             appointment.appointment_datetime = new_datetime
             appointment.status = "RESCHEDULED"
+            appointment.active_slot_token = "ACTIVE"
             await self.db.flush()
             await self.db.refresh(appointment)
 
@@ -317,6 +329,15 @@ class AppointmentEngine:
                 "new_datetime": new_datetime.isoformat()
             }
 
+        except IntegrityError as ie:
+            await self.db.rollback()
+            engine_logger.warning(f"IntegrityError prevented concurrent reschedule double-booking: {ie}")
+            return {
+                "code": "SLOT_FULL",
+                "message": f"The slot at {new_datetime.strftime('%I:%M %p')} on {search_date} is already booked by another patient.",
+                "nearest_slot": nearest_slot or "कृपया अन्य स्लॉट चुनें"
+            }
         except Exception as e:
+            await self.db.rollback()
             engine_logger.error(f"Error rescheduling appointment {appointment_id}: {str(e)}", exc_info=True)
             return {"code": "ERROR", "message": str(e)}

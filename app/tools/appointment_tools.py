@@ -386,6 +386,7 @@ class AppointmentTools:
 
         # 5. Execute Cancellation Transactionally
         appt.status = "CANCELLED"
+        appt.active_slot_token = None
         appt.consultation_status = "CANCELLED"
         appt.updated_at = datetime.now()
 

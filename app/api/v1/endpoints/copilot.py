@@ -363,13 +363,33 @@ async def get_conversation_history(
     actor: Dict[str, Any] = Depends(get_copilot_actor),
     db: AsyncSession = Depends(get_db)
 ):
-    """Fetches chat thread history for a session."""
+    """Fetches chat thread history for a session with strict tenant isolation."""
     conv_stmt = select(CopilotConversation).where(
         CopilotConversation.id == conversation_id
     )
     conv = (await db.execute(conv_stmt)).scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    # Enforce tenant isolation (IDOR-01 protection)
+    actor_role = (actor.get("role") or "").upper().replace(" ", "_")
+    actor_hospital_id = actor.get("hospital_id")
+    actor_user_id = actor.get("user_id")
+    is_super_admin = actor_role in ["SUPER_ADMIN", "SUPERADMIN"] or actor_hospital_id == "super_admin"
+
+    if not is_super_admin:
+        # Cross-hospital access is strictly forbidden
+        if conv.hospital_id and conv.hospital_id != actor_hospital_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Cannot access conversation belonging to another hospital."
+            )
+        # Patient privacy: Patient cannot access another user's conversation thread
+        if actor_role == "PATIENT" and conv.user_id and conv.user_id != actor_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: Cannot access another patient's conversation."
+            )
 
     msg_stmt = select(CopilotMessage).where(CopilotMessage.conversation_id == conv.id).order_by(CopilotMessage.created_at.asc())
     messages = (await db.execute(msg_stmt)).scalars().all()

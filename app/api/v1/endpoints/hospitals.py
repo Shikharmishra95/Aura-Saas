@@ -8,6 +8,7 @@ import jwt as _jwt
 
 from app.database.session import get_db
 from app.core.dependencies import get_current_user
+from app.api.v1.endpoints.owner.dependencies import require_super_admin
 from app.core.config import settings
 from app.core.logging import logger
 from app.database.models.call_log import User, Role, UserRole
@@ -36,9 +37,13 @@ async def api_health_check(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/hospitals", tags=["admin"])
-async def list_hospitals(db: AsyncSession = Depends(get_db)):
+async def list_hospitals(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_super_admin)
+):
     """Super Admin: Returns all registered hospitals with their details.
     Optimized: fetches all hospital_settings in ONE bulk query instead of 5 per-hospital queries.
+    Protected: Requires SUPER_ADMIN privileges. Sensitive credentials are redacted.
     """
     # 1. Fetch all hospitals in one query
     hospitals = (await db.execute(select(Hospital))).scalars().all()
@@ -67,6 +72,14 @@ async def list_hospitals(db: AsyncSession = Depends(get_db)):
     for h in hospitals:
         s = settings_map.get(h.id, {})
         twilio_helpline = s.get("twilio_helpline") or (settings.TWILIO_PHONE_NUMBER if h.id == "hosp_default" else "")
+        
+        # Redact sensitive credentials to prevent exposure
+        raw_auth_token = s.get("twilio_auth_token") or (settings.TWILIO_AUTH_TOKEN if h.id == "hosp_default" else "")
+        masked_auth_token = "••••••••" if raw_auth_token else ""
+
+        raw_admin_password = s.get("admin_password", "")
+        masked_admin_password = "••••••••" if raw_admin_password else ""
+
         result.append({
             "id": h.id,
             "name": h.name,
@@ -82,9 +95,9 @@ async def list_hospitals(db: AsyncSession = Depends(get_db)):
             "twilio_helpline": twilio_helpline,
             "whatsapp_number": s.get("whatsapp_number") or (settings.TWILIO_WHATSAPP_FROM if h.id == "hosp_default" else ""),
             "twilio_account_sid": s.get("twilio_account_sid") or (settings.TWILIO_ACCOUNT_SID if h.id == "hosp_default" else ""),
-            "twilio_auth_token": s.get("twilio_auth_token") or (settings.TWILIO_AUTH_TOKEN if h.id == "hosp_default" else ""),
+            "twilio_auth_token": masked_auth_token,
             "admin_username": s.get("admin_username", ""),
-            "admin_password": s.get("admin_password", "")
+            "admin_password": masked_admin_password
         })
     return result
 

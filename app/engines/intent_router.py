@@ -134,12 +134,12 @@ class CopilotIntentRouter:
         )
         has_strong_rag = len(rag_hits) > 0 and rag_hits[0].score >= 0.22
 
-        # 6. Pre-prune Permitted Tools
+        # 6. Pre-prune Permitted Tools (Pass top 10 role-authorized tools to fit within Groq token limits)
         pruned_tools = tool_registry.prune_tools_for_user(
             query=query,
             user_role=role_upper,
             user_permissions=permissions,
-            top_k=6
+            top_k=10
         )
 
         # Check for High-Risk Confirmation

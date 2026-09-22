@@ -175,7 +175,23 @@ async def upgrade_hospital_plan(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_user)
 ):
-    """Upgrades hospital subscription tier, extending validity and dynamically applying quotas from DB."""
+    """Upgrades hospital subscription tier, extending validity and dynamically applying quotas from DB.
+    Protected: Requires SuperAdmin or matching Hospital Admin. Enforces strict tenant isolation.
+    """
+    # 1. Enforce RBAC & Tenant Isolation (IDOR-02 protection)
+    role_stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_admin.id)
+    roles = set((await db.execute(role_stmt)).scalars().all())
+
+    is_super_admin = "SUPER_ADMIN" in roles or current_admin.hospital_id == "super_admin"
+    is_hospital_admin = bool(roles.intersection({"ADMIN", "HOSPITAL_ADMIN"}))
+
+    if not is_super_admin:
+        if not is_hospital_admin or current_admin.hospital_id != hospital_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: You can only upgrade subscriptions for your own hospital."
+            )
+
     hosp_stmt = select(Hospital).where(Hospital.id == hospital_id)
     hospital = (await db.execute(hosp_stmt)).scalar_one_or_none()
     if not hospital:
