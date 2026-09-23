@@ -1,3 +1,5 @@
+import os
+os.environ["DISABLE_SENTRY"] = "1"
 import asyncio
 from datetime import date, time, datetime, timedelta, timezone
 import uuid

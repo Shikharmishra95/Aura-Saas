@@ -35,7 +35,7 @@ SWEEP_INTERVAL_SECONDS = 3600  # 1 hour
 # ───────────────────────────────────────────────────────────────────────────
 
 
-async def auto_update_missed_appointments(db: AsyncSession):
+async def auto_update_missed_appointments(db: AsyncSession, force: bool = False):
     """
     Sweeper that auto-marks expired appointments as MISSED and dispatches WhatsApp notifications.
     Throttled: runs at most once per hour to avoid full-table scan on every request.
@@ -45,8 +45,8 @@ async def auto_update_missed_appointments(db: AsyncSession):
     global _last_sweep_run
     now = datetime.now()
 
-    # Skip if sweeper ran recently (within last hour)
-    if _last_sweep_run and (now - _last_sweep_run).total_seconds() < SWEEP_INTERVAL_SECONDS:
+    # Skip if sweeper ran recently (within last hour), unless explicitly forced (e.g. testing or admin trigger)
+    if not force and _last_sweep_run and (now - _last_sweep_run).total_seconds() < SWEEP_INTERVAL_SECONDS:
         return
     _last_sweep_run = now
 
@@ -243,30 +243,43 @@ async def create_appointment(
     except Exception as ie:
         logger.error(f"Error during idempotency lookup: {str(ie)}")
         
-    try:
-        target_hospital_id = payload.hospital_id
-        if current_user.hospital_id and current_user.hospital_id != "super_admin":
-            target_hospital_id = current_user.hospital_id
+    target_hospital_id = payload.hospital_id
+    if current_user.hospital_id and current_user.hospital_id != "super_admin":
+        target_hospital_id = current_user.hospital_id
 
-        engine = AppointmentEngine(db)
-        res = await engine.book_appointment(
-            hospital_id=target_hospital_id,
-            patient_id=payload.patient_id,
-            doctor_id=payload.doctor_id,
-            appointment_datetime=payload.appointment_datetime,
-            reason=payload.reason or "General Consultation",
-            source="PORTAL"
-        )
-        if res.get("code") != "BOOKING_SUCCESS":
-            raise HTTPException(status_code=400, detail=res.get("message", "Booking failed"))
-        
-        appt_stmt = select(Appointment).where(Appointment.id == res["appointment_id"])
-        appt = (await db.execute(appt_stmt)).scalar_one_or_none()
-        if not appt:
-            raise HTTPException(status_code=500, detail="Appointment created but could not be retrieved")
+    slot_iso = payload.appointment_datetime.isoformat() if hasattr(payload.appointment_datetime, 'isoformat') else str(payload.appointment_datetime)
+    lock_key = f"aura:prod:lock:slot:{payload.doctor_id}:{slot_iso}"
+
+    try:
+        from app.core.redis import redis_manager
+        async with redis_manager.acquire_lock(lock_key, timeout=5.0, blocking_timeout=2.0):
+            engine = AppointmentEngine(db)
+            res = await engine.book_appointment(
+                hospital_id=target_hospital_id,
+                patient_id=payload.patient_id,
+                doctor_id=payload.doctor_id,
+                appointment_datetime=payload.appointment_datetime,
+                reason=payload.reason or "General Consultation",
+                source="PORTAL"
+            )
+            if res.get("code") != "BOOKING_SUCCESS":
+                raise HTTPException(status_code=400, detail=res.get("message", "Booking failed"))
             
-        await db.commit()
-        logger.info(f"Booking successfully committed to DB. Appointment ID: {appt.id}")
+            appt_stmt = select(Appointment).where(Appointment.id == res["appointment_id"])
+            appt = (await db.execute(appt_stmt)).scalar_one_or_none()
+            if not appt:
+                raise HTTPException(status_code=500, detail="Appointment created but could not be retrieved")
+                
+            await db.commit()
+            logger.info(f"Booking successfully committed to DB. Appointment ID: {appt.id}")
+
+            # Invalidate doctor availability cache across distributed instances
+            await redis_manager.delete_pattern(f"aura:prod:{target_hospital_id}:slots:{payload.doctor_id}:*")
+    except TimeoutError:
+        raise HTTPException(
+            status_code=409,
+            detail="This slot is currently being reserved by another request. Please choose another time or retry."
+        )
     except Exception as ex:
         await db.rollback()
         logger.error(f"Error during appointment creation database transaction: {str(ex)}")

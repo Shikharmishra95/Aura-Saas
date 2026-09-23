@@ -490,7 +490,7 @@ ANALYTICS_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "sql": """
             SELECT 
                 h.name AS hospital_name,
-                h.city,
+                COALESCE(h.address, 'N/A') AS location,
                 COUNT(a.id) AS total_appointments,
                 COALESCE(SUM(CASE WHEN a.status = 'COMPLETED' AND a.payment_status = 'PAID' THEN d.opd_fees ELSE 0 END), 0) AS collected_revenue
             FROM appointments a
@@ -498,7 +498,7 @@ ANALYTICS_TEMPLATES: Dict[str, Dict[str, Any]] = {
             JOIN doctors d ON a.doctor_id = d.id
             WHERE DATE(a.appointment_datetime) >= :date_from
               AND DATE(a.appointment_datetime) <= :date_to
-            GROUP BY h.id, h.name, h.city
+            GROUP BY h.id, h.name, h.address
             ORDER BY collected_revenue DESC
             LIMIT 15
         """,
@@ -516,14 +516,14 @@ ANALYTICS_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "sql": """
             SELECT 
                 h.name AS hospital_name,
-                h.city,
+                COALESCE(h.address, 'N/A') AS location,
                 h.subscription_plan AS plan,
-                h.subscription_end_date AS expiry_date,
-                DATEDIFF(h.subscription_end_date, CURDATE()) AS days_remaining
+                h.plan_expires_at AS expiry_date,
+                DATEDIFF(h.plan_expires_at, CURDATE()) AS days_remaining
             FROM hospitals h
             WHERE h.is_active = 1
-              AND h.subscription_end_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL :days_ahead DAY)
-            ORDER BY h.subscription_end_date ASC
+              AND h.plan_expires_at BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL :days_ahead DAY)
+            ORDER BY h.plan_expires_at ASC
         """,
         "params": {
             "days_ahead": {"type": "integer", "description": "Number of days to look ahead (default: 30)"}
@@ -541,15 +541,15 @@ ANALYTICS_TEMPLATES: Dict[str, Dict[str, Any]] = {
                 COUNT(*) AS hospital_count,
                 SUM(
                     CASE h.subscription_plan
-                        WHEN 'STARTER'    THEN 4999
-                        WHEN 'GROWTH'     THEN 14999
-                        WHEN 'ENTERPRISE' THEN 39999
+                        WHEN 'STARTER'    THEN 1500
+                        WHEN 'GROWTH'     THEN 2999
+                        WHEN 'ENTERPRISE' THEN 29999
                         ELSE 0
                     END
                 ) AS monthly_revenue
             FROM hospitals h
             WHERE h.is_active = 1
-              AND h.subscription_end_date >= CURDATE()
+              AND (h.plan_expires_at IS NULL OR h.plan_expires_at >= CURDATE())
             GROUP BY h.subscription_plan
             ORDER BY monthly_revenue DESC
         """,
@@ -564,15 +564,15 @@ ANALYTICS_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "sql": """
             SELECT 
                 h.name AS hospital_name,
-                h.city,
+                COALESCE(h.address, 'N/A') AS location,
                 h.subscription_plan AS plan,
-                h.subscription_end_date AS expiry,
+                h.plan_expires_at AS expiry,
                 COUNT(a.id) AS appointments_this_month
             FROM hospitals h
             LEFT JOIN appointments a ON a.hospital_id = h.id
                 AND a.appointment_datetime >= DATE_FORMAT(CURDATE(), '%%Y-%%m-01')
             WHERE h.is_active = 1
-            GROUP BY h.id, h.name, h.city, h.subscription_plan, h.subscription_end_date
+            GROUP BY h.id, h.name, h.address, h.subscription_plan, h.plan_expires_at
             ORDER BY appointments_this_month DESC
         """,
         "params": {},

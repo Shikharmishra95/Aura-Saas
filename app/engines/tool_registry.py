@@ -658,10 +658,11 @@ class DynamicToolRegistry:
             ToolMetadata(
                 tool_name="get_revenue_and_dues",
                 domain="finance",
-                description="Get financial and OPD revenue summary: total revenue collected, paid transactions, and pending collection dues for today, week, month, or all time.",
+                description="Get financial and OPD revenue summary: total revenue collected, paid transactions, and pending collection dues for today, week, month, or all time. Can optionally target a specific hospital by ID.",
                 parameters={
                     "type": "OBJECT",
                     "properties": {
+                        "hospital_id": {"type": "STRING", "description": "Optional hospital ID (e.g. 'HOSP-RAOH-4893') to scope revenue to a specific hospital. If omitted in SuperAdmin mode, aggregates across all hospitals."},
                         "time_range": {"type": "STRING", "description": "Period: 'today', 'week', 'month', or 'all' (use 'all' for all-time lifetime revenue and dues)"}
                     }
                 },
@@ -674,7 +675,7 @@ class DynamicToolRegistry:
                 risk_level="READ_ONLY"
             ),
             handler=lambda args, context, db: CopilotTools.get_revenue_and_dues(
-                hospital_id=context.get("hospital_id"),
+                hospital_id=args.get("hospital_id") or context.get("hospital_id"),
                 time_range=args.get("time_range", "today"),
                 role=context.get("role"),
                 db=db
@@ -794,10 +795,11 @@ class DynamicToolRegistry:
             ToolMetadata(
                 tool_name="get_comprehensive_doctor_analytics",
                 domain="admin",
-                description="Get multi-dimensional matrix of all doctors showing total appointments, completed, cancelled, working days, and revenue.",
+                description="Get multi-dimensional matrix of all doctors showing total appointments, completed, cancelled, working days, and revenue. Can target a specific hospital by ID.",
                 parameters={
                     "type": "OBJECT",
                     "properties": {
+                        "hospital_id": {"type": "STRING", "description": "Optional hospital ID (e.g. 'HOSP-RAOH-4893') to scope matrix to a specific hospital"},
                         "time_range": {"type": "STRING", "description": "'all' or 'month'"}
                     }
                 },
@@ -809,7 +811,7 @@ class DynamicToolRegistry:
                 risk_level="READ_ONLY"
             ),
             handler=lambda args, context, db: CopilotTools.get_comprehensive_doctor_analytics(
-                hospital_id=context.get("hospital_id"),
+                hospital_id=args.get("hospital_id") or context.get("hospital_id"),
                 time_range=args.get("time_range", "all"),
                 db=db
             )
@@ -1344,6 +1346,320 @@ class DynamicToolRegistry:
             handler=lambda args, context, db: CopilotTools.get_all_doctors_performance(
                 hospital_id=context.get("hospital_id"),
                 time_range=args.get("time_range", "all"),
+                db=db
+            )
+        )
+
+        # 41. get_specific_hospital_metrics (SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="get_specific_hospital_metrics",
+                domain="control_tower",
+                description="SuperAdmin cross-hospital drilldown for metrics, doctor counts, monthly OPD bookings, and revenue for a specific hospital by name or ID (e.g. 'Rao Hospital' or 'HOSP-RAOH-4893').",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "hospital_name_or_id": {"type": "STRING", "description": "Name or ID of the hospital (e.g. 'Rao Hospital', 'rao', 'HOSP-RAOH-4893')"}
+                    },
+                    "required": ["hospital_name_or_id"]
+                },
+                intent_examples=[
+                    "rao hospital metrics", "how is rao hospital performing", "details for balaji hospital",
+                    "rao hospital bookings and revenue", "specific hospital drilldown"
+                ],
+                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_specific_hospital_metrics(
+                hospital_name_or_id=args.get("hospital_name_or_id"),
+                db=db
+            )
+        )
+
+        # 42. get_platform_revenue_analytics (SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="get_platform_revenue_analytics",
+                domain="control_tower",
+                description="SuperAdmin platform MRR, total SaaS subscription revenue collected via Razorpay (LTV), active plan tier distribution, and top revenue hospitals.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {}
+                },
+                intent_examples=[
+                    "saas revenue", "platform subscription revenue", "mrr", "total saas collections",
+                    "how much revenue from subscriptions", "plan distribution"
+                ],
+                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_platform_revenue_analytics(db=db)
+        )
+
+        # 43. get_platform_voice_telemetry (SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="get_platform_voice_telemetry",
+                domain="control_tower",
+                description="SuperAdmin platform AI telephony telemetry: total voice calls processed today and all-time, plus breakdown per hospital.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {}
+                },
+                intent_examples=[
+                    "total ai voice calls", "telemetry", "how many calls processed today",
+                    "ai call volume across hospitals"
+                ],
+                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_platform_voice_telemetry(db=db)
+        )
+
+        # 44. get_platform_error_telemetry (SuperAdmin)
+        self.register(
+            ToolMetadata(
+                tool_name="get_platform_error_telemetry",
+                domain="control_tower",
+                description="SuperAdmin platform error streams, system exceptions, and failure logs by service.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "severity": {"type": "STRING", "description": "Optional severity filter: 'CRITICAL', 'ERROR', 'WARNING'"}
+                    }
+                },
+                intent_examples=[
+                    "platform errors", "error telemetry", "any failed services", "system exceptions"
+                ],
+                required_roles=["SUPER_ADMIN", "SUPERADMIN"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_platform_error_telemetry(
+                severity=args.get("severity"),
+                db=db
+            )
+        )
+
+        # 45. get_missed_and_cancelled_list (Receptionist / Admin)
+        self.register(
+            ToolMetadata(
+                tool_name="get_missed_and_cancelled_list",
+                domain="appointment",
+                description="Fetches list of patients who missed or cancelled their visits with reasons and contact details for follow-up.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "date_str": {"type": "STRING", "description": "Date YYYY-MM-DD"},
+                        "hospital_id": {"type": "STRING", "description": "Optional hospital ID"}
+                    }
+                },
+                intent_examples=[
+                    "missed appointments today", "cancelled visits", "patients who did not show up",
+                    "follow up missed patients", "cancellation list"
+                ],
+                required_roles=["RECEPTIONIST", "ADMIN", "SUPER_ADMIN", "ALL"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_missed_and_cancelled_list(
+                hospital_id=args.get("hospital_id") or context.get("hospital_id"),
+                date_str=args.get("date_str"),
+                db=db
+            )
+        )
+
+        # 46. mark_appointment_payment_paid (Receptionist / Admin)
+        self.register(
+            ToolMetadata(
+                tool_name="mark_appointment_payment_paid",
+                domain="finance",
+                description="Marks an appointment consultation fee as paid at counter (cash, UPI, card).",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "appointment_id": {"type": "STRING", "description": "Appointment ID e.g. 'apt_abc123'"},
+                        "payment_method": {"type": "STRING", "description": "'CASH', 'ONLINE', 'UPI', 'CARD'"}
+                    },
+                    "required": ["appointment_id"]
+                },
+                intent_examples=[
+                    "mark as paid", "cash received", "mark payment complete", "fees jama ho gayi"
+                ],
+                required_roles=["RECEPTIONIST", "ADMIN", "SUPER_ADMIN"],
+                risk_level="WRITE_CONFIRM"
+            ),
+            handler=lambda args, context, db: CopilotTools.mark_appointment_payment_paid(
+                hospital_id=context.get("hospital_id"),
+                appointment_id=args.get("appointment_id"),
+                payment_method=args.get("payment_method", "CASH"),
+                db=db
+            )
+        )
+
+        # 47. update_patient_queue_status (Receptionist / Doctor)
+        self.register(
+            ToolMetadata(
+                tool_name="update_patient_queue_status",
+                domain="queue",
+                description="Updates patient queue status in live OPD (IN_PROGRESS, COMPLETED, MISSED, CANCELLED).",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "appointment_id": {"type": "STRING", "description": "Appointment ID"},
+                        "new_status": {"type": "STRING", "description": "'IN_PROGRESS', 'COMPLETED', 'MISSED', 'CANCELLED'"}
+                    },
+                    "required": ["appointment_id", "new_status"]
+                },
+                intent_examples=[
+                    "patient andar gaya", "consultation complete", "mark completed", "mark in consultation"
+                ],
+                required_roles=["RECEPTIONIST", "DOCTOR", "ADMIN", "SUPER_ADMIN"],
+                risk_level="WRITE_CONFIRM"
+            ),
+            handler=lambda args, context, db: CopilotTools.update_patient_queue_status(
+                hospital_id=context.get("hospital_id"),
+                appointment_id=args.get("appointment_id"),
+                new_status=args.get("new_status"),
+                db=db
+            )
+        )
+
+        # 48. get_my_patient_appointments (Patient Portal)
+        self.register(
+            ToolMetadata(
+                tool_name="get_my_patient_appointments",
+                domain="patient",
+                description="Retrieves upcoming and past appointments for a patient by phone number.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "phone": {"type": "STRING", "description": "10-digit mobile number"}
+                    }
+                },
+                intent_examples=[
+                    "my appointments", "meri booking kab hai", "upcoming visits", "past appointments"
+                ],
+                required_roles=["PATIENT", "ALL"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_my_patient_appointments(
+                phone=args.get("phone") or context.get("patient_phone", ""),
+                hospital_id=context.get("hospital_id"),
+                db=db
+            )
+        )
+
+        # 49. get_patient_prescription_receipt (Patient Portal)
+        self.register(
+            ToolMetadata(
+                tool_name="get_patient_prescription_receipt",
+                domain="patient",
+                description="Retrieves latest prescription and payment invoice details for a patient by phone number.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "phone": {"type": "STRING", "description": "10-digit mobile number"}
+                    }
+                },
+                intent_examples=[
+                    "download prescription", "my latest prescription", "parcha dikhao", "medical receipt"
+                ],
+                required_roles=["PATIENT", "ALL"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_patient_prescription_receipt(
+                phone=args.get("phone") or context.get("patient_phone", ""),
+                hospital_id=context.get("hospital_id"),
+                db=db
+            )
+        )
+
+        # 50. check_doctor_leave_status (Doctor / Admin)
+        self.register(
+            ToolMetadata(
+                tool_name="check_doctor_leave_status",
+                domain="doctor",
+                description="Checks if a specific doctor is on approved leave for a given date.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "doctor_name": {"type": "STRING", "description": "Doctor name"},
+                        "date_str": {"type": "STRING", "description": "Date YYYY-MM-DD"}
+                    },
+                    "required": ["doctor_name"]
+                },
+                intent_examples=[
+                    "is dr vivek on leave today", "kya doctor chutti par hain", "doctor leave status"
+                ],
+                required_roles=["DOCTOR", "ADMIN", "SUPER_ADMIN", "ALL"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.check_doctor_leave_status(
+                hospital_id=context.get("hospital_id"),
+                doctor_name=args.get("doctor_name"),
+                date_str=args.get("date_str"),
+                db=db
+            )
+        )
+
+        # 51. get_doctor_leave_history (Admin / Doctor)
+        self.register(
+            ToolMetadata(
+                tool_name="get_doctor_leave_history",
+                domain="admin",
+                description="Fetches recent and pending leave applications for doctors in the hospital.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "doctor_name": {"type": "STRING", "description": "Optional doctor name to filter"}
+                    }
+                },
+                intent_examples=[
+                    "pending leaves", "doctor leave applications", "who applied for leave", "leave history"
+                ],
+                required_roles=["ADMIN", "SUPER_ADMIN", "DOCTOR"],
+                risk_level="READ_ONLY"
+            ),
+            handler=lambda args, context, db: CopilotTools.get_doctor_leave_history(
+                hospital_id=context.get("hospital_id"),
+                doctor_name=args.get("doctor_name"),
+                db=db
+            )
+        )
+
+        # 52. record_patient_intake_vitals (Receptionist / Doctor)
+        self.register(
+            ToolMetadata(
+                tool_name="record_patient_intake_vitals",
+                domain="emr",
+                description="Records patient clinical vitals (BP, pulse, temperature, SpO2, weight) and chief complaint.",
+                parameters={
+                    "type": "OBJECT",
+                    "properties": {
+                        "appointment_id": {"type": "STRING", "description": "Appointment ID"},
+                        "chief_complaint": {"type": "STRING", "description": "Primary symptom / complaint"},
+                        "bp": {"type": "STRING", "description": "Blood pressure e.g. '120/80'"},
+                        "pulse": {"type": "INTEGER", "description": "Pulse bpm"},
+                        "temperature": {"type": "NUMBER", "description": "Body temperature in F"},
+                        "spo2": {"type": "INTEGER", "description": "Oxygen saturation %"},
+                        "weight": {"type": "NUMBER", "description": "Weight in kg"}
+                    },
+                    "required": ["appointment_id", "chief_complaint"]
+                },
+                intent_examples=[
+                    "record vitals", "patient bp pulse note karo", "add patient vitals"
+                ],
+                required_roles=["RECEPTIONIST", "DOCTOR", "ADMIN"],
+                risk_level="WRITE_CONFIRM"
+            ),
+            handler=lambda args, context, db: CopilotTools.record_patient_intake_vitals(
+                hospital_id=context.get("hospital_id"),
+                appointment_id=args.get("appointment_id"),
+                chief_complaint=args.get("chief_complaint", "General consultation"),
+                bp=args.get("bp"),
+                pulse=args.get("pulse"),
+                temperature=args.get("temperature"),
+                spo2=args.get("spo2"),
+                weight=args.get("weight"),
                 db=db
             )
         )

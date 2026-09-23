@@ -40,8 +40,8 @@ class RoleScopedRAGEngine:
     """
 
     EMBEDDINGS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "rag_embeddings_cache.json")
-    EMBEDDING_MODEL = "models/text-embedding-004"
-    EMBEDDING_DIM = 768
+    EMBEDDING_MODEL = "models/gemini-embedding-001"
+    EMBEDDING_DIM = 3072
 
     def __init__(self):
         self._documents: Dict[str, KnowledgeDocument] = {}

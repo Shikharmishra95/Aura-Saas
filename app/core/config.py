@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     N8N_WEBHOOK_URL: str
     N8N_API_KEY: str = ""
 
+    # Redis Enterprise Distributed Cache & Locking Configurations
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_ENABLED: bool = True
+    REDIS_MAX_CONNECTIONS: int = 50
+    REDIS_SOCKET_TIMEOUT: float = 2.0
+
     # Security Configuration
     BACKEND_CORS_ORIGINS: List[str] = ["*"]
 

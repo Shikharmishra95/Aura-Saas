@@ -20,6 +20,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: aura_redis
+    restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save 60 1
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -34,6 +49,8 @@ services:
       - MYSQL_USER=hospital_user
       - MYSQL_PASSWORD=hospital_password_sec
       - MYSQL_DATABASE=hospital_voice_db
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_ENABLED=True
       - ENV=production
       - DEBUG=False
       - GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
@@ -47,6 +64,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   mysql_data:
+  redis_data:

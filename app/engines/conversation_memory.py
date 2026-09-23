@@ -29,6 +29,8 @@ class ActionConfirmationToken(BaseModel):
 
 
 class SessionContextState(BaseModel):
+    current_hospital_name: Optional[str] = None
+    current_hospital_id: Optional[str] = None
     current_doctor_name: Optional[str] = None
     current_doctor_id: Optional[str] = None
     selected_date: Optional[str] = None
@@ -260,6 +262,141 @@ class MultiTenantConversationMemory:
         # Consume token (one-time use)
         self._pending_confirmations.pop(token, None)
         return record
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Distributed Redis Synchronization Methods
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _get_redis_key(self, prefix: str, hospital_id: Optional[str], user_id: Optional[str], session_id: Optional[str]) -> str:
+        h_id = hospital_id or "GLOBAL"
+        u_id = user_id or "ANONYMOUS"
+        s_id = session_id or "DEFAULT"
+        return f"aura:prod:{h_id}:{prefix}:{u_id}:{s_id}"
+
+    async def load_session_from_redis(
+        self,
+        hospital_id: Optional[str],
+        user_id: Optional[str],
+        session_id: Optional[str]
+    ) -> None:
+        """Loads distributed session context state, messages, and summary from Redis into memory."""
+        try:
+            from app.core.redis import redis_manager
+        except ImportError:
+            return
+
+        ctx_key = self._get_redis_key("ctx", hospital_id, user_id, session_id)
+        conv_key = self._get_redis_key("conv", hospital_id, user_id, session_id)
+        sum_key = self._get_redis_key("sum", hospital_id, user_id, session_id)
+        comp_key = self._get_compound_key(hospital_id, user_id, session_id)
+
+        # 1. Load context state
+        ctx_dict = await redis_manager.get_json(ctx_key)
+        if ctx_dict and isinstance(ctx_dict, dict):
+            try:
+                self._context_states[comp_key] = SessionContextState.model_validate(ctx_dict)
+            except Exception as e:
+                logger.debug(f"Error deserializing SessionContextState from Redis: {e}")
+
+        # 2. Load conversation history
+        conv_list = await redis_manager.get_json(conv_key)
+        if conv_list and isinstance(conv_list, list):
+            try:
+                self._sessions[comp_key] = [ConversationMessage.model_validate(m) for m in conv_list]
+            except Exception as e:
+                logger.debug(f"Error deserializing ConversationMessage list from Redis: {e}")
+
+        # 3. Load summary
+        sum_str = await redis_manager.get_json(sum_key)
+        if sum_str and isinstance(sum_str, str):
+            self._session_summaries[comp_key] = sum_str
+
+    async def save_session_to_redis(
+        self,
+        hospital_id: Optional[str],
+        user_id: Optional[str],
+        session_id: Optional[str]
+    ) -> None:
+        """Persists session context state, messages, and summary to Redis with sliding window TTL."""
+        try:
+            from app.core.redis import redis_manager
+        except ImportError:
+            return
+
+        ctx_key = self._get_redis_key("ctx", hospital_id, user_id, session_id)
+        conv_key = self._get_redis_key("conv", hospital_id, user_id, session_id)
+        sum_key = self._get_redis_key("sum", hospital_id, user_id, session_id)
+        comp_key = self._get_compound_key(hospital_id, user_id, session_id)
+
+        # 1. Save context state
+        if comp_key in self._context_states:
+            ctx = self._context_states[comp_key]
+            await redis_manager.set_json(ctx_key, ctx.model_dump(), ttl_seconds=self.default_ttl_seconds)
+
+        # 2. Save conversation history
+        if comp_key in self._sessions:
+            msgs = [m.model_dump() for m in self._sessions[comp_key]]
+            await redis_manager.set_json(conv_key, msgs, ttl_seconds=self.default_ttl_seconds)
+
+        # 3. Save summary
+        if comp_key in self._session_summaries:
+            await redis_manager.set_json(sum_key, self._session_summaries[comp_key], ttl_seconds=self.default_ttl_seconds)
+
+    async def async_create_confirmation_token(
+        self,
+        hospital_id: str,
+        user_id: str,
+        action_name: str,
+        action_args: Dict[str, Any],
+        summary: str,
+        expires_in_seconds: int = 600
+    ) -> ActionConfirmationToken:
+        """Creates token in memory AND persists to Redis for distributed worker validation."""
+        record = self.create_confirmation_token(
+            hospital_id=hospital_id,
+            user_id=user_id,
+            action_name=action_name,
+            action_args=action_args,
+            summary=summary,
+            expires_in_seconds=expires_in_seconds
+        )
+        try:
+            from app.core.redis import redis_manager
+            h_id = hospital_id or "GLOBAL"
+            u_id = user_id or "ANONYMOUS"
+            tok_key = f"aura:prod:{h_id}:token:{record.token}"
+            latest_key = f"aura:prod:{h_id}:latest_token:{u_id}"
+            await redis_manager.set_json(tok_key, record.model_dump(), ttl_seconds=expires_in_seconds)
+            await redis_manager.set_json(latest_key, record.token, ttl_seconds=expires_in_seconds)
+        except Exception as e:
+            logger.debug(f"Redis store confirmation token warning: {e}")
+        return record
+
+    async def async_validate_and_consume_token(
+        self,
+        token: str,
+        hospital_id: str,
+        user_id: str
+    ) -> Optional[ActionConfirmationToken]:
+        """Validates confirmation token across distributed workers using Redis."""
+        h_id = hospital_id or "GLOBAL"
+        tok_key = f"aura:prod:{h_id}:token:{token}"
+
+        try:
+            from app.core.redis import redis_manager
+            tok_dict = await redis_manager.get_json(tok_key)
+            if tok_dict and isinstance(tok_dict, dict):
+                rec = ActionConfirmationToken.model_validate(tok_dict)
+                now = time.time()
+                if now <= rec.expires_at and rec.hospital_id == h_id and (rec.user_id == (user_id or "ANONYMOUS")):
+                    await redis_manager.delete(tok_key)
+                    self._pending_confirmations.pop(token, None)
+                    return rec
+        except Exception as e:
+            logger.debug(f"Redis token validate error: {e}")
+
+        # Fallback to local memory
+        return self.validate_and_consume_token(token, hospital_id, user_id)
 
 
 # Global singleton instance

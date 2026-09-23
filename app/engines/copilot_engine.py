@@ -217,11 +217,45 @@ class CopilotEngine:
             return "\n".join(lines)
 
         elif tool_name == "get_revenue_and_dues":
+            coll = result.get('total_collected_formatted', '₹0')
+            txns = result.get('paid_transactions', 0)
+            tot_b = result.get('total_appointments', 0)
+            dues = result.get('pending_dues_formatted', '₹0')
+            pending_cnt = result.get('pending_collection_count', 0)
+            period = result.get('period', 'All Time')
+            h_name = result.get('hospital_name')
+            prefix = f"**{h_name}** ka " if h_name else ""
+
+            if pending_cnt > 0:
+                return (
+                    f"💰 {prefix}Total collected OPD revenue **{coll}** hai ({txns} paid transactions, {period}). "
+                    f"Iske alawa **{dues}** ({pending_cnt} appointments) pending dues hain."
+                )
             return (
-                f"### 💰 Financial & OPD Revenue Summary ({result.get('period', 'Today')})\n\n"
-                f"* **Total Appointments Booked:** {result.get('total_appointments', 0)}\n"
-                f"* **Total Revenue Collected (Paid):** **{result.get('total_collected_formatted', '₹0')}** ({result.get('paid_transactions', 0)} transactions)\n"
-                f"* **Pending Collection / Dues:** **{result.get('pending_dues_formatted', '₹0')}** ({result.get('pending_collection_count', 0)} pending)"
+                f"💰 {prefix}Total collected OPD revenue **{coll}** hai ({txns} paid appointments, total {tot_b} bookings, {period})."
+            )
+
+        elif tool_name == "get_specific_hospital_metrics":
+            h_name = result.get('hospital_name', 'Hospital')
+            plan = result.get('subscription_plan', 'STARTER')
+            docs = result.get('total_doctors', 0)
+            rev = result.get('monthly_revenue', '₹0')
+            appts = result.get('monthly_appointments', 0)
+            return (
+                f"🏥 **{h_name}** ({plan} Plan):\n\n"
+                f"* **Active Doctors:** **{docs} doctors**\n"
+                f"* **Monthly OPD Revenue:** **{rev}**\n"
+                f"* **Total Bookings This Month:** **{appts} appointments**"
+            )
+
+        elif tool_name == "get_platform_revenue_analytics":
+            saas_rev = result.get('total_platform_saas_revenue', '₹0')
+            txns = result.get('total_transactions', 0)
+            top_h = result.get('top_revenue_hospital', 'N/A')
+            top_amt = result.get('top_revenue_amount', '₹0')
+            return (
+                f"💳 **AURA SaaS Platform Total Revenue (LTV):** **{saas_rev}** ({txns} subscription payments via Razorpay).\n"
+                f"Top contributing tenant hospital is **{top_h}** ({top_amt})."
             )
 
         elif tool_name == "get_queue_statistics":
@@ -945,6 +979,7 @@ class CopilotEngine:
         # 0. Multi-Turn Entity Extraction & Typo-Normalized Query
         normalized_msg = entity_extractor.normalize_text(user_message)
         extracted: ExtractedEntities = entity_extractor.extract_entities(normalized_msg)
+        await conversation_memory.load_session_from_redis(hospital_id, user_id, session_id)
         context_state: SessionContextState = conversation_memory.get_context_state(hospital_id, user_id, session_id)
 
         # Logged-in Patient Identity Binding (Permanent Account Phone Lock)
@@ -974,6 +1009,23 @@ class CopilotEngine:
                 context_state.patient_phone = extracted.patient_phone
         if extracted.appointment_id:
             context_state.last_appointment_id = extracted.appointment_id
+
+        # Multi-Turn Target Hospital Resolution (Locks discussed hospital for SuperAdmin drilldowns)
+        if role_upper in ["SUPER_ADMIN", "SUPERADMIN"] and db:
+            resolved_hosp = await cls._resolve_target_hospital(user_message, db)
+            if not resolved_hosp and chat_history:
+                for prev_msg in reversed(chat_history[-4:]):
+                    prev_text = prev_msg.get("content", "")
+                    resolved_hosp = await cls._resolve_target_hospital(prev_text, db)
+                    if resolved_hosp:
+                        break
+            if resolved_hosp:
+                context_state.current_hospital_id = resolved_hosp["id"]
+                context_state.current_hospital_name = resolved_hosp["name"]
+        elif hospital_id and str(hospital_id).strip() not in ["super_admin", "GLOBAL", "", "None", "null", None]:
+            context_state.current_hospital_id = str(hospital_id).strip()
+            if hospital_name and hospital_name not in ["Hospital", "Platform", "AURA Hospital"]:
+                context_state.current_hospital_name = hospital_name
 
         # Fast In-Memory Cache Check for Read Queries (Shielding Free-Tier 15 RPM limits)
         cache_key = f"{hospital_id}:{role}:{normalized_msg.lower().strip()}"
@@ -1120,6 +1172,7 @@ LOGGED-IN ACTOR IDENTITY (CRITICAL GROUNDING):
 
         working_context_block = f"""
 ACTIVE CONVERSATION WORKING CONTEXT & EXTRACTED ENTITIES:
+- Discussed / Scoped Hospital: {context_state.current_hospital_name or 'None'} (ID: {context_state.current_hospital_id or 'None'})
 - Discussed Doctor: {context_state.current_doctor_name or (actor_profile.get('doctor_name') if actor_profile else 'None')} (ID: {context_state.current_doctor_id or (actor_profile.get('doctor_id') if actor_profile else 'None')})
 - Target Date: {context_state.selected_date or filter_date}
 - Target Time / Slot: {context_state.selected_time or 'None'}
@@ -1166,22 +1219,28 @@ LIVE HOSPITAL ADMIN METRICS & DOCTOR STATUS TODAY ({filter_date}):
         super_admin_live_block = ""
         if role_upper in ["SUPER_ADMIN", "SUPERADMIN"] and db:
             try:
-                from app.tools.control_tower_tools import ControlTowerTools
-                fleet_overview = await ControlTowerTools.get_platform_control_tower_overview(db=db)
+                from app.engines.copilot_tools import CopilotTools
+                fleet_overview = await CopilotTools.get_platform_control_tower_overview(db=db)
                 fleet = fleet_overview.get("hospitals_fleet", [])
                 fleet_lines = []
                 for h in fleet:
                     fleet_lines.append(
                         f"- Hospital: '{h.get('hospital_name')}' | ID: '{h.get('hospital_id')}' | Plan: {h.get('subscription_plan')} | Status: {h.get('status')} | Doctors: {h.get('active_doctors')} | Total Appointments: {h.get('total_appointments')}"
                     )
+                target_hosp_ctx = f"'{context_state.current_hospital_name}' (ID: '{context_state.current_hospital_id}')" if context_state.current_hospital_id else "None"
                 super_admin_live_block = f"""
 PLATFORM OWNER (SUPER ADMIN) CONTROL TOWER & FLEET DIRECTIVES:
 - Authenticated Mode: SUPER_ADMIN (Platform Owner / Control Tower).
+- Currently Scoped Hospital in Multi-Turn Context: {target_hosp_ctx}
 - ROLE BOUNDARY: You are the Platform Owner assistant, NOT a hospital receptionist. NEVER book patient OPD appointments or ask for patient details. If a user asks to book an appointment, clearly inform them that patient bookings are handled via individual hospital reception portals.
 - REGISTERED TENANT HOSPITALS ON AURA PLATFORM:
 {chr(10).join(fleet_lines)}
 - CRITICAL TOOL & QUERY DIRECTIVES:
-  * When asked about revenue, metrics, or details for a specific hospital (e.g. 'rao hospita', 'balaji', 'apollo'), map it to its registered Hospital ID above (e.g. 'Rao Hospital' -> 'HOSP-RAOH-4893') and pass that hospital_id to 'get_revenue_and_dues(hospital_id=...)' or 'get_comprehensive_doctor_analytics(hospital_id=...)'.
+  * When a specific hospital is being discussed in context ({target_hosp_ctx}) or named in user query:
+    - Pass that hospital_id to 'get_revenue_and_dues(hospital_id=...)' for appointment revenue.
+    - Pass that hospital_name_or_id to 'get_specific_hospital_metrics(hospital_name_or_id=...)' for overall hospital fleet performance.
+    - Pass that hospital_id to 'get_comprehensive_doctor_analytics(hospital_id=...)' for doctor matrix.
+  * For SaaS Platform Subscription Revenue (LTV, MRR, Razorpay collections shown in Control Tower cards), use 'get_platform_revenue_analytics()'.
   * When using 'search_platform_hospital', pass ONLY the core hospital name keyword (e.g. 'rao'), NOT full query strings.
 """
             except Exception as sa_e:
@@ -1220,12 +1279,15 @@ Current Authenticated Context:
 {expired_consulting_block}
 
 STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
-1. ZERO HALLUCINATION: NEVER invent, guess, or fabricate appointment IDs (apt_...), doctor IDs, patient medical records, slot timings, prices (₹), queue numbers, or financial metrics.
-2. SOURCE OF TRUTH: Every factual detail in your response MUST be directly derived from verified database tool output or the official hospital directory/knowledge snippets above.
-3. MISSING ENTITIES: If a doctor, patient, appointment, slot, or record is not found in tool outputs, explicitly inform the user that no record was found. Never guess.
-4. ACTION ACCURACY: Do not claim an appointment or change was booked/modified unless the tool returned success=True with a verified database ID.
-5. MULTI-STEP REASONING: You can execute a sequence of tools across turns (e.g. search doctor -> get slots -> book appointment) to completely satisfy multi-step user questions.
-6. FORMATTING: Use clean, structured Markdown with bullet points or tables. Highlight key IDs and amounts clearly. Never return raw JSON.
+1. ZERO HALLUCINATION ON NUMBERS & METRICS: NEVER invent, guess, or fabricate appointment IDs, doctor IDs, patient records, slot timings, prices, revenue amounts (₹), or counts. Every number MUST come directly from tool outputs.
+2. MANDATORY TOOL EXECUTION: When the user asks for counts, revenues, earnings, queues, or rosters, ALWAYS execute the corresponding database tool (e.g. get_revenue_and_dues, get_specific_hospital_metrics, get_platform_revenue_analytics, get_doctor_metrics, search_platform_hospital). Never answer financial or metric questions without a tool call.
+3. SOURCE OF TRUTH: Every factual detail in your response MUST be directly derived from verified database tool output or the official hospital directory/knowledge snippets above.
+4. MISSING ENTITIES: If a doctor, patient, appointment, slot, or record is not found in tool outputs, explicitly inform the user that no record was found. Never guess.
+5. CONVERSATIONAL HUMAN BREVITY & DIRECT ANSWERS:
+   - Talk like a helpful, intelligent human executive assistant, NOT a robotic data dumper.
+   - Match user brevity: If the user asks a quick, direct question (e.g. 'total appointment revenue?', 'how much doctor in rao hospital?'), answer directly in 1-2 friendly, natural sentences first. State the exact verified number right away.
+   - DO NOT dump large multi-table reports, lengthy highlight lists, or unsolicited breakdown sections unless the user explicitly asks for 'breakdown', 'detailed report', or 'table'.
+6. FORMATTING: Use clean, human-friendly Markdown. Highlight key IDs and amounts clearly with bold text. Never return raw JSON.
 7. LANGUAGE: Mirror user language (English, Hindi, or polite Hinglish).
 """
 
@@ -1255,14 +1317,16 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                 db=db
             )
             if groq_res:
+                await conversation_memory.save_session_to_redis(hospital_id, user_id, session_id)
                 return groq_res
 
         gemini_api_key = settings.GEMINI_API_KEY
         models_to_try = [
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
-            "gemini-2.0-flash",
-            "gemini-1.5-pro"
+            "gemini-3.6-flash",
+            "gemini-flash-latest",
+            "gemini-3.7-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-pro-latest"
         ]
         headers = {
             "Content-Type": "application/json"
@@ -1415,6 +1479,7 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
             context_state=context_state, actor_profile=actor_profile
         )
         if offline_res:
+            await conversation_memory.save_session_to_redis(hospital_id, user_id, session_id)
             offline_res["route"] = decision.route.value
             if not offline_res.get("suggestions"):
                 offline_res["suggestions"] = cls._build_contextual_suggestions(
@@ -1498,6 +1563,7 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
 
         bullets = "\n".join([f"* **{sug}**" for sug in fallback_suggestions])
         full_reply = f"{fallback_reply}\n\n{bullets}"
+        await conversation_memory.save_session_to_redis(hospital_id, user_id, session_id)
         return {
             "reply": full_reply,
             "route": decision.route.value,
@@ -1781,6 +1847,11 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                                     break
 
                                 # Auto-resolve missing fields
+                                if context_state.current_hospital_id:
+                                    if not targs.get("hospital_id"):
+                                        targs["hospital_id"] = context_state.current_hospital_id
+                                    if not targs.get("hospital_name_or_id"):
+                                        targs["hospital_name_or_id"] = context_state.current_hospital_name or context_state.current_hospital_id
                                 if "doctor_id" in targs and not targs["doctor_id"] and context_state.current_doctor_id:
                                     targs["doctor_id"] = context_state.current_doctor_id
                                 if "doctor_name" in targs and not targs["doctor_name"] and context_state.current_doctor_name:
@@ -1788,8 +1859,9 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                                 if "date_str" in targs and not targs["date_str"] and context_state.selected_date:
                                     targs["date_str"] = context_state.selected_date
 
+                                effective_hid = context_state.current_hospital_id or hospital_id
                                 enriched_context = {
-                                    "hospital_id": hospital_id,
+                                    "hospital_id": effective_hid,
                                     "user_id": user_id,
                                     "role": role
                                 }
@@ -1814,6 +1886,16 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                                 context_state.last_tool_used = tname
                                 context_state.last_tool_result = tresult
                                 if isinstance(tresult, dict):
+                                    if tresult.get("hospital_id"):
+                                        context_state.current_hospital_id = tresult["hospital_id"]
+                                    if tresult.get("hospital_name"):
+                                        context_state.current_hospital_name = tresult["hospital_name"]
+                                    if tresult.get("hospitals") and isinstance(tresult["hospitals"], list) and len(tresult["hospitals"]) == 1:
+                                        single_h = tresult["hospitals"][0]
+                                        if single_h.get("hospital_id"):
+                                            context_state.current_hospital_id = single_h["hospital_id"]
+                                        if single_h.get("name"):
+                                            context_state.current_hospital_name = single_h["name"]
                                     if tresult.get("doctor_id"):
                                         context_state.current_doctor_id = tresult["doctor_id"]
                                     if tresult.get("doctor_name") or tresult.get("name"):
@@ -1833,6 +1915,20 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                         # Text reply received
                         txt = msg_obj.get("content", "")
                         if txt and txt.strip():
+                            # ZERO-HALLUCINATION GUARD:
+                            # If model made factual/financial claims (contains currency symbol or appointment counts)
+                            # without executing ANY database tool, intercept with deterministic tool matcher!
+                            msg_low = user_message.lower()
+                            is_metric_query = any(w in msg_low for w in ["revenue", "kamai", "earning", "earnings", "appointment", "doctor", "booking", "due", "dues", "fee", "fees", "patient"])
+                            if not executed_tool_name and is_metric_query and ("₹" in txt or re.search(r'\b\d{2,}\s*(?:appointments?|bookings?|doctors?|txns?)\b', txt, re.I)):
+                                logger.warning(f"Zero-Hallucination Guard: Groq generated metric text without tool execution. Intercepting with deterministic tool execution.")
+                                offline_fix = await cls._match_offline_intent(
+                                    user_message, role, hospital_id, user_id, db,
+                                    context_state=context_state, actor_profile=actor_profile
+                                )
+                                if offline_fix and offline_fix.get("tool_used"):
+                                    return offline_fix
+
                             return {
                                 "reply": txt.strip(),
                                 "tool_used": executed_tool_name,
@@ -2725,15 +2821,28 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
         if any(w in msg_lower for w in ["revenue", "paisa", "rupaye", "money", "collected", "collection", "dues", "kamai", "paid", "unpaid", "pending collection"]):
             t_range = "all" if any(w in msg_lower for w in ["all time", "lifetime", "total", "overall", "all"]) else ("month" if any(w in msg_lower for w in ["month", "mahine", "is mahine"]) else "today")
 
-            # Resolve target hospital if specified or if in SuperAdmin context
+            # Resolve target hospital if specified or if stored in context state
             resolved_hosp = None
-            effective_hospital_id = hospital_id or ""
-            effective_hospital_name = (actor_profile.get("hospital_name") if actor_profile else None) or "Hospital"
+            effective_hospital_id = (context_state.current_hospital_id if context_state else None) or hospital_id or ""
+            effective_hospital_name = (context_state.current_hospital_name if context_state else None) or (actor_profile.get("hospital_name") if actor_profile else None) or "Hospital"
             if db:
                 resolved_hosp = await cls._resolve_target_hospital(user_message, db)
                 if resolved_hosp:
                     effective_hospital_id = resolved_hosp["id"]
                     effective_hospital_name = resolved_hosp["name"]
+                    if context_state:
+                        context_state.current_hospital_id = resolved_hosp["id"]
+                        context_state.current_hospital_name = resolved_hosp["name"]
+
+            # Check if this is a SaaS platform subscription revenue request
+            is_saas_query = any(w in msg_lower for w in ["saas", "subscription", "mrr", "platform revenue", "razorpay"]) and role_upper in ["SUPER_ADMIN", "SUPERADMIN"]
+            if is_saas_query:
+                saas_res = await CopilotTools.get_platform_revenue_analytics(db=db)
+                return {
+                    "reply": cls._format_markdown_fallback("get_platform_revenue_analytics", saas_res),
+                    "tool_used": "get_platform_revenue_analytics",
+                    "tool_result": saas_res
+                }
 
             # Check if user is asking for a specific doctor's revenue
             doc_candidate = None
@@ -2767,14 +2876,13 @@ STRICT ANTI-HALLUCINATION & GROUNDING DIRECTIVES:
                     }
 
             res = await CopilotTools.get_revenue_and_dues(hospital_id=effective_hospital_id, time_range=t_range, role=role, db=db)
-            prefix = f"{effective_hospital_name} — " if (resolved_hosp or (effective_hospital_name and effective_hospital_name not in ['Hospital', 'Platform', 'AURA Hospital'])) else ""
-            reply = (
-                f"### 💰 {prefix}Financial & OPD Revenue Summary ({res.get('period', 'Today')})\n\n"
-                f"* **Total Appointments Booked:** {res.get('total_appointments', 0)}\n"
-                f"* **Total Revenue Collected (Paid):** **{res.get('total_collected_formatted', '₹0')}** ({res.get('paid_transactions', 0)} transactions)\n"
-                f"* **Pending Collection / Dues:** **{res.get('pending_dues_formatted', '₹0')}** ({res.get('pending_collection_count', 0)} pending)"
-            )
-            return {"reply": reply, "tool_used": "get_revenue_and_dues", "tool_result": res}
+            if effective_hospital_name and effective_hospital_name not in ['Hospital', 'Platform', 'AURA Hospital']:
+                res["hospital_name"] = effective_hospital_name
+            return {
+                "reply": cls._format_markdown_fallback("get_revenue_and_dues", res),
+                "tool_used": "get_revenue_and_dues",
+                "tool_result": res
+            }
 
         # 8. Doctor Leave / On-Duty / Sitting Status (Specific Named Doctor)
         if any(w in msg_lower for w in ["leave", "chutti", "off duty", "off-duty", "baith", "aayenge", "duty par", "available", "on duty", "on-duty", "weekly off"]):

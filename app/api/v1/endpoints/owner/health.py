@@ -42,6 +42,10 @@ async def get_system_health_radar(
     # 5. WhatsApp status
     whatsapp_status = "HEALTHY" if has_twilio else "DEGRADED"
 
+    # 6. Redis Distributed Cache & Concurrency Locks check
+    from app.core.redis import redis_manager
+    redis_info = await redis_manager.get_health()
+
     overall = "HEALTHY"
     if any(s == "DOWN" for s in [db_status, twilio_status, gemini_status]):
         overall = "DOWN"
@@ -57,6 +61,14 @@ async def get_system_health_radar(
                 "status": db_status,
                 "latency_ms": db_latency,
                 "provider": "Railway / Cloud"
+            },
+            "redis_cache": {
+                "name": redis_info.get("name", "Redis Distributed Cache & Locks"),
+                "status": redis_info.get("status", "HEALTHY"),
+                "latency_ms": redis_info.get("latency_ms", 0.05),
+                "provider": redis_info.get("provider", "Redis Cluster / RAM"),
+                "active_keys": redis_info.get("active_keys", 0),
+                "memory_used": redis_info.get("memory_used", "N/A")
             },
             "twilio_voice": {
                 "name": "Twilio Voice Webhooks",

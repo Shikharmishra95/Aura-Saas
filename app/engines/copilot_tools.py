@@ -1231,7 +1231,11 @@ class CopilotTools:
         if not db:
             return {"error": "Invalid session or tenant context"}
 
-        is_super_admin = (role and role.upper() in ["SUPER_ADMIN", "SUPERADMIN"]) or hospital_id in ["super_admin", "GLOBAL", "", None]
+        # Tenancy scoping: Filter by hospital_id if a specific tenant is targeted
+        # (even if user is SUPER_ADMIN, if a specific hospital is requested, drill down into that hospital)
+        target_hospital_id = None
+        if hospital_id and str(hospital_id).strip() not in ["super_admin", "GLOBAL", "", "None", "null"]:
+            target_hospital_id = str(hospital_id).strip()
 
         now = datetime.now()
         stmt = select(
@@ -1244,9 +1248,9 @@ class CopilotTools:
             func.sum(case((Appointment.payment_status == "PENDING", Doctor.opd_fees), else_=0)).label("pending_amount")
         ).select_from(Appointment).join(Doctor, Appointment.doctor_id == Doctor.id)
 
-        if not is_super_admin and hospital_id:
-            stmt = stmt.where(Appointment.hospital_id == hospital_id)
-            amt_stmt = amt_stmt.where(Appointment.hospital_id == hospital_id)
+        if target_hospital_id:
+            stmt = stmt.where(Appointment.hospital_id == target_hospital_id)
+            amt_stmt = amt_stmt.where(Appointment.hospital_id == target_hospital_id)
 
         t_range_norm = (time_range or "today").lower().strip()
         if any(w in t_range_norm for w in ["all", "lifetime", "overall", "total"]):

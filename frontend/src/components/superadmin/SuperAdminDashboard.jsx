@@ -24,9 +24,19 @@ export default function SuperAdminDashboard({
   hospitalStaff = { doctors: [], receptionists: [] },
   setHospitalStaff,
   hospitalStaffLoading = false,
+  selectedHospital: propSelectedHospital,
+  setSelectedHospital: propSetSelectedHospital,
+  superAdminView: propSuperAdminView,
+  setSuperAdminView: propSetSuperAdminView,
 }) {
-  const [selectedHospital, setSelectedHospital] = useState(null); // null = list view, hosp obj = detail view
-  const [superAdminView, setSuperAdminView] = useState('control_tower'); // 'control_tower' | 'hospitals' | 'owners'
+  const [internalSelectedHospital, setInternalSelectedHospital] = useState(null);
+  const selectedHospital = propSelectedHospital !== undefined ? propSelectedHospital : internalSelectedHospital;
+  const setSelectedHospital = propSetSelectedHospital || setInternalSelectedHospital;
+
+  const [internalSuperAdminView, setInternalSuperAdminView] = useState('control_tower');
+  const superAdminView = propSuperAdminView !== undefined ? propSuperAdminView : internalSuperAdminView;
+  const setSuperAdminView = propSetSuperAdminView || setInternalSuperAdminView;
+
   const [expandedStaffCard, setExpandedStaffCard] = useState(null);
 
   // Platform Owners Registration state

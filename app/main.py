@@ -1,3 +1,4 @@
+import os
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
@@ -8,25 +9,26 @@ import logging
 # Captures ALL unhandled exceptions, slow DB queries, API performance traces.
 # send_default_pii=False → Patient names, phones, OTPs are NEVER sent to Sentry .
 # Docs: https://docs.sentry.io/platforms/python/integrations/fastapi/
-sentry_sdk.init(
-    dsn="https://9c7474e970f0c976378ab5f0a547eb9b@o4512101179260928.ingest.us.sentry.io/4512101226446848",
-    environment="production",        # Change to "development" locally
-    release="aura-saas@1.0.0",      # Update version on each deploy
-    send_default_pii=False,          # CRITICAL: Never send patient PII to Sentry
-    enable_logs=True,                # Capture Python logger.error() calls too
-    traces_sample_rate=0.2,          # Track 20% of requests for performance (free tier safe)
-    profiles_sample_rate=0.1,        # Profile 10% of transactions
-    integrations=[
-        FastApiIntegration(
-            transaction_style="endpoint",  # Groups traces by endpoint name
-        ),
-        SqlalchemyIntegration(),     # Captures slow/failed DB queries automatically
-        LoggingIntegration(
-            level=logging.ERROR,     # Send logger.error() and above to Sentry
-            event_level=logging.ERROR,
-        ),
-    ],
-)
+if not os.getenv("DISABLE_SENTRY") and not os.getenv("PYTEST_CURRENT_TEST"):
+    sentry_sdk.init(
+        dsn="https://9c7474e970f0c976378ab5f0a547eb9b@o4512101179260928.ingest.us.sentry.io/4512101226446848",
+        environment="production",        # Change to "development" locally
+        release="aura-saas@1.0.0",      # Update version on each deploy
+        send_default_pii=False,          # CRITICAL: Never send patient PII to Sentry
+        enable_logs=True,                # Capture Python logger.error() calls too
+        traces_sample_rate=0.2,          # Track 20% of requests for performance (free tier safe)
+        profiles_sample_rate=0.1,        # Profile 10% of transactions
+        integrations=[
+            FastApiIntegration(
+                transaction_style="endpoint",  # Groups traces by endpoint name
+            ),
+            SqlalchemyIntegration(),     # Captures slow/failed DB queries automatically
+            LoggingIntegration(
+                level=logging.ERROR,     # Send logger.error() and above to Sentry
+                event_level=logging.ERROR,
+            ),
+        ],
+    )
 # ────────────────────────────────────────────────────────────────────────────
 
 from fastapi import FastAPI, Depends
